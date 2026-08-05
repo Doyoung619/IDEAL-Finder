@@ -99,7 +99,9 @@ class ExperimentRuntime:
             gender=condition_gender,
             race="_".join(condition_races),
         )
-        if prior_path not in self._conditional_priors:
+        force_standard_normal = values.get("prior_mode") == "standard_normal"
+        cache_key = prior_path + ("::standard_normal" if force_standard_normal else "")
+        if cache_key not in self._conditional_priors:
             if self.config.generator.mode == "demo":
                 dimension = min(
                     int(self.config.conditional_prior.dimension),
@@ -118,7 +120,7 @@ class ExperimentRuntime:
                     accepted_samples=1,
                     seed=int(self.config.query.seed),
                 )
-            elif not Path(prior_path).exists():
+            elif force_standard_normal or not Path(prior_path).exists():
                 if not self.projector.is_fitted:
                     self.ensure_ready()
                 model = self.projector.model
@@ -129,9 +131,8 @@ class ExperimentRuntime:
                     int(model.components_.shape[0]),
                 )
                 warnings.warn(
-                    "Conditional prior artifact was not found at "
-                    f"{prior_path}; using the fitted generic latent PCA prior "
-                    "until a demographic prior is generated.",
+                    "Using the fitted generic latent PCA prior with a standard "
+                    "normal theta prior for entropy exploration.",
                     RuntimeWarning,
                     stacklevel=2,
                 )
@@ -170,5 +171,5 @@ class ExperimentRuntime:
                     "Conditional prior condition does not match the requested "
                     f"gender/races: {condition_gender}/{condition_races}"
                 )
-            self._conditional_priors[prior_path] = prior
-        return self._conditional_priors[prior_path]
+            self._conditional_priors[cache_key] = prior
+        return self._conditional_priors[cache_key]

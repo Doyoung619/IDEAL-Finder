@@ -257,57 +257,16 @@ def _generate_entropy_round(
         raise RuntimeError(
             "Entropy Query returned an unexpected number of synthetic queries"
         )
-    evaluated = evaluate_candidates(runtime, proposal.latents)
-    strict_indices = strict_candidate_indices(
-        runtime,
-        evaluated,
-        participant.preferred_target_gender,
-        participant.preferred_age_appearance,
-    )
-    display_indices = strict_indices[: block.m_value]
-    display_candidates = [evaluated[index] for index in display_indices]
-    display_features = proposal.features[display_indices]
+    images = runtime.generator.decode(proposal.latents)
+    display_candidates = [
+        _unfiltered_candidate(latent, image)
+        for latent, image in zip(proposal.latents, images)
+    ]
+    display_features = proposal.features
     display_roles = [
         proposal.roles[index] if proposal.roles else f"entropy_query_{index + 1}"
-        for index in display_indices
+        for index in range(block.m_value)
     ]
-    missing = block.m_value - len(display_candidates)
-    if missing:
-        fallback_candidates = generate_filtered_prior_candidates(
-            runtime,
-            participant.preferred_target_gender,
-            participant.preferred_face_region,
-            participant.preferred_age_appearance,
-            count=max(missing * 2, 4),
-            seed=seed + 7919,
-        )
-        fallback_latents = np.vstack(
-            [candidate.latent for candidate in fallback_candidates]
-        )
-        diverse_indices = farthest_point_sampling(
-            fallback_latents,
-            count=missing,
-            seed=seed + 15485863,
-        )
-        display_candidates.extend(
-            fallback_candidates[index] for index in diverse_indices
-        )
-        display_features = np.vstack(
-            [
-                display_features,
-                np.zeros(
-                    (missing, proposal.features.shape[1]),
-                    dtype=np.float32,
-                ),
-            ]
-        )
-        display_roles.extend(
-            f"filtered_{index + 1}" for index in range(missing)
-        )
-    if len(display_candidates) != block.m_value:
-        raise RuntimeError(
-            "Could not produce the requested number of hard-filtered faces."
-        )
     round_directory = (
         Path(block.strategy_state_path).parent / f"round_{round_id:02d}"
     )
@@ -346,6 +305,34 @@ def _generate_entropy_round(
         )
     db.commit()
     return artifacts
+
+
+def _unfiltered_candidate(latent: np.ndarray, image: Image.Image) -> EvaluatedCandidate:
+    """Wrap an entropy query without demographic filtering or CLIP scoring."""
+    return EvaluatedCandidate(
+        latent=np.asarray(latent, dtype=np.float32),
+        image=image,
+        gender_label="not_evaluated",
+        gender_confidence=0.0,
+        gender_backend="entropy_unfiltered",
+        is_adult=True,
+        adult_confidence=0.0,
+        adult_backend="entropy_unfiltered",
+        is_clean_portrait=True,
+        portrait_confidence=0.0,
+        portrait_backend="entropy_unfiltered",
+        face_region_label="not_evaluated",
+        east_asian_confidence=0.0,
+        face_region_backend="entropy_unfiltered",
+        age_appearance_label="not_evaluated",
+        twenties_confidence=0.0,
+        twenties_thirties_confidence=0.0,
+        age_appearance_backend="entropy_unfiltered",
+        quality_score=0.0,
+        quality_accepted=True,
+        face_detected=True,
+        quality_backend="entropy_unfiltered",
+    )
 
 
 def update_block_after_selection(

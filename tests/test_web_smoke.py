@@ -83,5 +83,5 @@ def test_demo_flow_reaches_first_generated_round(tmp_path):
         assert participant.preferred_age_appearance == "twenties_boost"
         assert participant.dating_experience is None
         assert participant.image_selection_importance is None
-        assert '"condition_gender":"male"' in block.strategy_parameters_json
+        assert '"prior_mode":"standard_normal"' in block.strategy_parameters_json
         assert all(image.latent_path.endswith(".npy") for image in images)

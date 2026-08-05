@@ -188,16 +188,7 @@ async def start_experiment1(request: Request, db: Session = Depends(get_db)):
         return redirect("/answer-key")
     existing = find_block(db, participant, block_index)
     if existing is None:
-        strategy_parameters = {
-            "condition_gender": (
-                participant.preferred_target_gender
-                if participant.preferred_target_gender in {"female", "male"}
-                else request.app.state.config.demographic.gender
-            ),
-            "condition_races": list(
-                request.app.state.config.demographic.race_targets
-            ),
-        }
+        strategy_parameters = {"prior_mode": "standard_normal"}
         get_or_create_block(
             db,
             request.app.state.runtime,
