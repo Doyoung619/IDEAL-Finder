@@ -266,6 +266,14 @@ def _generate_entropy_round(
     np.save(round_directory / "posterior_mean.npy", prior.theta_mean)
     np.save(round_directory / "posterior_covariance.npy", prior.theta_covariance)
     np.save(round_directory / "map_estimate.npy", prior.theta_mean)
+    save_json(
+        round_directory / "entropy_metrics.json",
+        {
+            "sampling": "independent_standard_normal_prior",
+            "posterior_update": "recorded_but_not_used_for_sampling",
+            "exploration_radius": None,
+        },
+    )
     artifacts: list[LatentImage] = []
     for display_index, candidate in enumerate(display_candidates):
         candidate.image.save(
