@@ -278,7 +278,7 @@ def _generate_entropy_round(
             participant.preferred_target_gender,
             participant.preferred_face_region,
             participant.preferred_age_appearance,
-            count=max(missing * 4, 8),
+            count=max(missing * 2, 4),
             seed=seed + 7919,
         )
         fallback_latents = np.vstack(
@@ -625,7 +625,18 @@ def generate_filtered_prior_candidates(
     target_age_appearance: str | None,
     count: int,
     seed: int,
+    use_precomputed_cache: bool = True,
 ) -> list[EvaluatedCandidate]:
+    if use_precomputed_cache:
+        cached = _load_precomputed_candidates(
+            runtime,
+            target_gender,
+            target_face_region,
+            target_age_appearance,
+            count,
+        )
+        if cached is not None:
+            return cached
     pool_size = max(count * runtime.config.experiment.candidate_pool_multiplier, count)
     pool_size = _region_pool_size(
         runtime,
@@ -635,26 +646,38 @@ def generate_filtered_prior_candidates(
         required_count=count,
     )
     accepted: list[EvaluatedCandidate] = []
+    evaluation_batch_size = max(
+        int(runtime.config.clip.batch_size),
+        int(getattr(runtime.generator, "batch_size", 1)),
+    )
     for attempt in range(int(runtime.config.filters.max_filter_attempts)):
         latents = runtime.generator.sample_prior(
             pool_size,
             seed + attempt * 15485863,
         )
-        evaluated = evaluate_candidates(runtime, latents)
-        accepted.extend(
-            candidate
-            for candidate in evaluated
-            if candidate.quality_accepted
-            and candidate.face_detected
-            and _east_asian_accepted(runtime, candidate)
-            and _matches_age_preference(candidate, target_age_appearance)
-            and _adult_accepted(runtime, candidate)
-            and _portrait_accepted(runtime, candidate)
-            and runtime.gender_controller.accepts(
-                _gender_estimate(candidate),
-                target_gender,
+        # Stop evaluating the safety pool once enough hard-valid faces exist.
+        # This avoids CLIP-scoring all 512 candidates for a small request.
+        for start in range(0, len(latents), evaluation_batch_size):
+            evaluated = evaluate_candidates(
+                runtime,
+                latents[start : start + evaluation_batch_size],
             )
-        )
+            accepted.extend(
+                candidate
+                for candidate in evaluated
+                if candidate.quality_accepted
+                and candidate.face_detected
+                and _east_asian_accepted(runtime, candidate)
+                and _matches_age_preference(candidate, target_age_appearance)
+                and _adult_accepted(runtime, candidate)
+                and _portrait_accepted(runtime, candidate)
+                and runtime.gender_controller.accepts(
+                    _gender_estimate(candidate),
+                    target_gender,
+                )
+            )
+            if len(accepted) >= count:
+                break
         if len(accepted) >= count:
             break
     if len(accepted) < count:
@@ -671,6 +694,97 @@ def generate_filtered_prior_candidates(
         reverse=True,
     )
     return accepted[:count]
+
+
+def _precomputed_candidate_path(
+    runtime,
+    target_gender: str | None,
+    target_face_region: str | None,
+    target_age_appearance: str | None,
+) -> Path | None:
+    if target_face_region != "east_asian_only" or target_age_appearance != "twenties_boost":
+        return None
+    if target_gender not in {"female", "male"}:
+        return None
+    return (
+        Path(runtime.config.paths.data_dir)
+        / "precomputed"
+        / f"initial_{target_gender}_east_asian_20s.npz"
+    )
+
+
+def _load_precomputed_candidates(
+    runtime,
+    target_gender: str | None,
+    target_face_region: str | None,
+    target_age_appearance: str | None,
+    count: int,
+) -> list[EvaluatedCandidate] | None:
+    path = _precomputed_candidate_path(
+        runtime,
+        target_gender,
+        target_face_region,
+        target_age_appearance,
+    )
+    if path is None or not path.exists():
+        return None
+    try:
+        with np.load(path, allow_pickle=False) as cache:
+            latents = np.asarray(cache["latents"], dtype=np.float32)
+            records = json.loads(str(cache["records_json"].item()))
+        if len(latents) < count or len(records) != len(latents):
+            return None
+        images = runtime.generator.decode(latents[:count])
+        return [
+            EvaluatedCandidate(
+                latent=latent,
+                image=image,
+                **record,
+            )
+            for latent, image, record in zip(latents[:count], images, records[:count])
+        ]
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def save_precomputed_candidates(
+    runtime,
+    candidates: list[EvaluatedCandidate],
+    target_gender: str,
+    target_face_region: str = "east_asian_only",
+    target_age_appearance: str = "twenties_boost",
+) -> Path:
+    path = _precomputed_candidate_path(
+        runtime,
+        target_gender,
+        target_face_region,
+        target_age_appearance,
+    )
+    if path is None:
+        raise ValueError("Precomputed candidates require the fixed demographic filters")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    records = []
+    for candidate in candidates:
+        records.append(
+            {
+                field: getattr(candidate, field)
+                for field in (
+                    "gender_label", "gender_confidence", "gender_backend",
+                    "is_adult", "adult_confidence", "adult_backend",
+                    "is_clean_portrait", "portrait_confidence", "portrait_backend",
+                    "face_region_label", "east_asian_confidence", "face_region_backend",
+                    "age_appearance_label", "twenties_confidence",
+                    "twenties_thirties_confidence", "age_appearance_backend",
+                    "quality_score", "quality_accepted", "face_detected", "quality_backend",
+                )
+            }
+        )
+    np.savez_compressed(
+        path,
+        latents=np.asarray([candidate.latent for candidate in candidates], dtype=np.float32),
+        records_json=np.asarray(json.dumps(records, ensure_ascii=False)),
+    )
+    return path
 
 
 def evaluate_candidates(runtime, latents: np.ndarray) -> list[EvaluatedCandidate]:
