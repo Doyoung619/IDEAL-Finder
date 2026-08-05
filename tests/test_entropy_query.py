@@ -67,7 +67,7 @@ def test_exploration_radius_expands_query_ellipsoid():
             posterior_mc_samples=64,
             num_restarts=2,
             optimization_steps=20,
-            exploration_radius=1.5,
+            exploration_radius=5.0,
             device="cpu",
         )
     )
@@ -76,9 +76,9 @@ def test_exploration_radius_expands_query_ellipsoid():
     inverse = np.linalg.inv(prior.theta_covariance)
     radii = np.einsum("ni,ij,nj->n", delta, inverse, delta)
 
-    assert result.exploration_radius == 1.5
-    assert np.all(radii <= 2.25 + 1e-5)
-    assert result.max_mahalanobis_radius <= 1.5 + 1e-5
+    assert result.exploration_radius == 5.0
+    assert np.all(radii <= 25.0 + 1e-5)
+    assert result.max_mahalanobis_radius <= 5.0 + 1e-5
 
 
 def test_duplicate_queries_have_zero_information_and_score_is_nonnegative():

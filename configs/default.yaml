@@ -91,7 +91,7 @@ query:
   num_restarts: 8
   optimization_steps: 200
   learning_rate: 0.05
-  exploration_radius: 1.5
+  exploration_radius: 5.0
   constraint: "prior_ellipsoid"
   seed: 0
 
