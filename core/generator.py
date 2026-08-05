@@ -103,43 +103,92 @@ class StyleGAN2ADAGenerator(FaceGenerator):
     def latent_dim(self) -> int:
         return int(self.network.w_dim)
 
-    def sample_prior(self, count: int, seed: int) -> np.ndarray:
-        random = np.random.default_rng(seed)
-        z = torch.from_numpy(
-            random.standard_normal((count, self.network.z_dim)).astype(np.float32)
-        ).to(self.device)
-        c = torch.zeros((count, self.network.c_dim), device=self.device)
+    @property
+    def z_dim(self) -> int:
+        """Return the input dimension of the StyleGAN mapping network."""
+        return int(self.network.z_dim)
+
+    @property
+    def w_dim(self) -> int:
+        """Return the dimension of a single StyleGAN W latent."""
+        return int(self.network.w_dim)
+
+    def map_z_to_w(self, z: np.ndarray | torch.Tensor) -> np.ndarray:
+        """Map a validated batch of Z vectors to single-vector W-space."""
+        if isinstance(z, torch.Tensor):
+            values = z.detach().to(dtype=torch.float32, device=self.device)
+        else:
+            array = np.asarray(z, dtype=np.float32)
+            values = torch.from_numpy(array).to(self.device)
+        if values.ndim != 2 or values.shape[1] != self.z_dim:
+            raise ValueError(f"z must have shape (N, {self.z_dim})")
+        if not torch.isfinite(values).all():
+            raise ValueError("z contains NaN or Inf")
+        condition = torch.zeros(
+            (values.shape[0], self.network.c_dim), device=self.device
+        )
         with torch.no_grad():
             w_plus = self.network.mapping(
-                z,
-                c,
+                values,
+                condition,
                 truncation_psi=self.truncation_psi,
             )
         return w_plus[:, 0, :].detach().cpu().numpy().astype(np.float32)
 
-    def decode(self, latents: np.ndarray) -> list[Image.Image]:
-        latent_batch = np.atleast_2d(latents).astype(np.float32)
-        results: list[Image.Image] = []
-        for start in range(0, len(latent_batch), self.batch_size):
-            batch = latent_batch[start : start + self.batch_size]
-            w = torch.from_numpy(batch).to(self.device)
-            w_plus = w.unsqueeze(1).repeat(1, self.network.num_ws, 1)
+    def synthesize_w(self, w: np.ndarray | torch.Tensor) -> torch.Tensor:
+        """Synthesize a W batch as CPU float images in the [0, 1] range."""
+        if isinstance(w, torch.Tensor):
+            values = w.detach().to(dtype=torch.float32, device=self.device)
+        else:
+            values = torch.from_numpy(np.asarray(w, dtype=np.float32)).to(
+                self.device
+            )
+        if values.ndim != 2 or values.shape[1] != self.w_dim:
+            raise ValueError(f"w must have shape (N, {self.w_dim})")
+        if not torch.isfinite(values).all():
+            raise ValueError("w contains NaN or Inf")
+        image_batches: list[torch.Tensor] = []
+        for start in range(0, len(values), self.batch_size):
+            batch = values[start : start + self.batch_size]
+            w_plus = batch.unsqueeze(1).repeat(1, self.network.num_ws, 1)
             with torch.no_grad():
                 images = self.network.synthesis(
                     w_plus,
                     noise_mode=self.noise_mode,
                     force_fp32=True,
                 )
-                images = (images * 127.5 + 128).clamp(0, 255).to(torch.uint8)
-                images = images.permute(0, 2, 3, 1).cpu().numpy()
-            for array in images:
-                image = Image.fromarray(array, "RGB")
-                if image.size != (self.output_resolution, self.output_resolution):
-                    image = image.resize(
-                        (self.output_resolution, self.output_resolution),
-                        Image.Resampling.LANCZOS,
-                    )
-                results.append(image)
+            image_batches.append(((images + 1.0) / 2.0).clamp(0, 1).cpu())
+        if not image_batches:
+            return torch.empty((0, 3, self.output_resolution, self.output_resolution))
+        return torch.cat(image_batches, dim=0)
+
+    def generate_from_theta(self, theta: np.ndarray, prior) -> torch.Tensor:
+        """Map conditional PCA coordinates to W and synthesize their images."""
+        w = np.atleast_2d(prior.theta_to_w(theta))
+        if w.shape[1] != self.w_dim:
+            raise ValueError(
+                f"prior W dimension {w.shape[1]} does not match generator {self.w_dim}"
+            )
+        return self.synthesize_w(w)
+
+    def sample_prior(self, count: int, seed: int) -> np.ndarray:
+        random = np.random.default_rng(seed)
+        z = random.standard_normal((count, self.z_dim)).astype(np.float32)
+        return self.map_z_to_w(z)
+
+    def decode(self, latents: np.ndarray) -> list[Image.Image]:
+        latent_batch = np.atleast_2d(latents).astype(np.float32)
+        tensors = self.synthesize_w(latent_batch)
+        results: list[Image.Image] = []
+        arrays = tensors.mul(255).round().to(torch.uint8).permute(0, 2, 3, 1)
+        for array in arrays.numpy():
+            image = Image.fromarray(array, "RGB")
+            if image.size != (self.output_resolution, self.output_resolution):
+                image = image.resize(
+                    (self.output_resolution, self.output_resolution),
+                    Image.Resampling.LANCZOS,
+                )
+            results.append(image)
         return results
 
 
@@ -366,3 +415,6 @@ def create_generator(config) -> FaceGenerator:
             noise_mode=config.generator.noise_mode,
         )
     raise ValueError(f"Unsupported generator mode: {config.generator.mode}")
+
+
+StyleGAN2GeneratorAdapter = StyleGAN2ADAGenerator

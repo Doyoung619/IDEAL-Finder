@@ -78,6 +78,40 @@ clip:
   device: "auto"
   batch_size: 16
 
+demographic:
+  classifier: "fairface"
+  weights: "models/fairface_res34.pth"
+  device: "auto"
+  batch_size: 32
+  gender: "female"
+  race_targets: ["east_asian"]
+  gender_threshold: 0.90
+  race_threshold: 0.80
+
+conditional_prior:
+  artifact_path: "artifacts/priors/{gender}_east_asian_d12.npz"
+  latent_space: "w"
+  dimension: 12
+  selection_mode: "hard"
+  num_generator_samples: 50000
+  min_accepted_samples: 2000
+  covariance_eps: 1.0e-6
+  covariance_shrinkage: 0.01
+  seed: 42
+
+query:
+  strategy: "mvlq"
+  num_options: 5
+  radius_mode: "initial_max_std"
+  backtrack_factor: 0.8
+  min_alpha: 0.1
+  max_backtracking_steps: 15
+  center_candidates: 16
+
+preference:
+  beta: 1.0
+  distance_space: "theta"
+
 demo:
   m_list: [2, 4, 8, 16]
   rounds_per_m: 1

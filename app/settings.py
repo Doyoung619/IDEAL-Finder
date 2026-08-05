@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
@@ -10,6 +11,7 @@ import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ENVIRONMENT_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 class ConfigNode(Mapping[str, Any]):
@@ -48,18 +50,52 @@ def _resolve_project_path(value: str) -> str:
     return str((PROJECT_ROOT / path).resolve())
 
 
+def _expand_environment(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _expand_environment(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_expand_environment(item) for item in value]
+    if not isinstance(value, str):
+        return value
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name not in os.environ:
+            raise RuntimeError(
+                f"Required environment variable '{name}' is not set"
+            )
+        return os.environ[name]
+
+    return ENVIRONMENT_PATTERN.sub(replace, value)
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
+
+
 def load_config(
     config_path: str | Path | None = None,
     demo_override: bool | None = None,
 ) -> ConfigNode:
+    default_path = PROJECT_ROOT / "configs" / "default.yaml"
     path = Path(
         config_path
-        or os.getenv("IDEAL_CONFIG", PROJECT_ROOT / "configs" / "default.yaml")
+        or os.getenv("IDEAL_CONFIG", default_path)
     )
     with path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle)
 
-    values = copy.deepcopy(raw)
+    if path.resolve() != default_path.resolve():
+        with default_path.open("r", encoding="utf-8") as handle:
+            defaults = yaml.safe_load(handle)
+        raw = _deep_merge(defaults, raw)
+    values = _expand_environment(copy.deepcopy(raw))
     demo_enabled = (
         demo_override
         if demo_override is not None
@@ -76,6 +112,14 @@ def load_config(
         values["paths"][key] = _resolve_project_path(values["paths"][key])
     for key in ("stylegan_repo", "network_path"):
         values["generator"][key] = _resolve_project_path(values["generator"][key])
+    if "demographic" in values:
+        values["demographic"]["weights"] = _resolve_project_path(
+            values["demographic"]["weights"]
+        )
+    if "conditional_prior" in values:
+        values["conditional_prior"]["artifact_path"] = _resolve_project_path(
+            values["conditional_prior"]["artifact_path"]
+        )
 
     db_url = values["database"]["url"]
     if db_url.startswith("sqlite:///"):
@@ -98,4 +142,3 @@ def save_config_snapshot(config: ConfigNode, destination: str | Path) -> None:
             allow_unicode=True,
             sort_keys=False,
         )
-

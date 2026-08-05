@@ -215,15 +215,17 @@ def generate_experiment_round(
     strategy = runtime.strategy_for(block.strategy_mode, strategy_parameters)
     center = np.load(block.mu_path)
     m_value = block.m_value
+    line_modes = {"mvlq", "demographic_constrained_mvlq"}
     direct_modes = {
         "mvlq",
+        "demographic_constrained_mvlq",
         "fast_direct",
         "heuristic",
         "axis_pair",
         "banditbo",
         "sequential_gallery",
     }
-    if block.strategy_mode == "mvlq":
+    if block.strategy_mode in line_modes:
         pool_size = m_value
     elif block.strategy_mode in direct_modes or (
         block.strategy_mode == "deepiec_mutation" and round_id > 1
@@ -276,7 +278,7 @@ def generate_experiment_round(
     )
     duplicate_distance = (
         0.0
-        if block.strategy_mode == "mvlq"
+        if block.strategy_mode in line_modes
         else float(
             strategy_parameters.get(
                 "duplicate_distance",
@@ -289,7 +291,7 @@ def generate_experiment_round(
     maximum_pool_size = max(pool_size, 512)
     maximum_attempts = (
         12
-        if block.strategy_mode == "mvlq"
+        if block.strategy_mode in line_modes
         else int(runtime.config.filters.max_filter_attempts)
     )
     query_scale = 1.0
@@ -297,7 +299,7 @@ def generate_experiment_round(
         proposal_seed = seed + proposal_attempts * 15485863
         query_scale = (
             max(0.01, 0.70**proposal_attempts)
-            if block.strategy_mode == "mvlq"
+            if block.strategy_mode in line_modes
             else block.sigma
         )
         proposal = _propose_block_population(
@@ -311,12 +313,16 @@ def generate_experiment_round(
             query_scale=query_scale,
         )
         evaluated = evaluate_candidates(runtime, proposal.latents)
-        selection_features = runtime.projector.transform(proposal.latents)
-        strict_indices = strict_candidate_indices(
-            runtime,
-            evaluated,
-            participant.preferred_target_gender,
-        )
+        if block.strategy_mode == "demographic_constrained_mvlq":
+            selection_features = proposal.features
+            strict_indices = list(range(len(proposal.latents)))
+        else:
+            selection_features = runtime.projector.transform(proposal.latents)
+            strict_indices = strict_candidate_indices(
+                runtime,
+                evaluated,
+                participant.preferred_target_gender,
+            )
         candidate_indices = unique_candidate_indices(
             selection_features,
             strict_indices,
@@ -328,12 +334,13 @@ def generate_experiment_round(
                 features=selection_features,
                 backend=proposal.backend,
                 roles=proposal.roles,
+                metadata=proposal.metadata,
             )
             break
         if (
             proposal_attempts + 1 >= maximum_attempts
             or (
-                block.strategy_mode != "mvlq"
+                block.strategy_mode not in line_modes
                 and current_pool_size >= maximum_pool_size
             )
         ):
@@ -342,14 +349,15 @@ def generate_experiment_round(
                 features=selection_features,
                 backend=proposal.backend,
                 roles=proposal.roles,
+                metadata=proposal.metadata,
             )
             break
         proposal_attempts += 1
-        if block.strategy_mode != "mvlq":
+        if block.strategy_mode not in line_modes:
             current_pool_size = min(maximum_pool_size, current_pool_size * 2)
 
     recovery_used = False
-    if len(candidate_indices) < m_value and block.strategy_mode != "mvlq":
+    if len(candidate_indices) < m_value and block.strategy_mode not in line_modes:
         proposal, evaluated, strict_indices = _append_filter_recovery_candidates(
             runtime,
             proposal,
@@ -405,7 +413,7 @@ def generate_experiment_round(
         preserve_indices = [0]
     selected_indices = (
         candidate_indices[:m_value]
-        if block.strategy_mode == "mvlq"
+        if block.strategy_mode in line_modes
         else region_boosted_candidate_indices(
             runtime,
             evaluated,
@@ -434,8 +442,9 @@ def generate_experiment_round(
             ),
             "search_scale": query_scale,
             "mvlq_query_scale": (
-                query_scale if block.strategy_mode == "mvlq" else None
+                query_scale if block.strategy_mode in line_modes else None
             ),
+            "constrained_mvlq": proposal.metadata,
             "face_region_preference": participant.preferred_face_region,
             "age_appearance_preference": participant.preferred_age_appearance,
             "proposal_attempts": proposal_attempts + 1,

@@ -16,3 +16,10 @@ outputs/*
 !outputs/screenshots/*.png
 models/*
 !models/.gitkeep
+*.pkl
+*.pth
+*.pt
+artifacts/priors/*.npz
+artifacts/latent_cache/
+generated/
+latent_cache/

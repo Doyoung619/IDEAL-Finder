@@ -31,7 +31,23 @@ class AlgorithmSpec:
 
 
 def algorithm_catalog(config) -> tuple[AlgorithmSpec, ...]:
-    del config
+    selected = getattr(getattr(config, "query", object()), "strategy", "mvlq")
+    if selected == "demographic_constrained_mvlq":
+        return (
+            AlgorithmSpec(
+                key="demographic_constrained_mvlq",
+                label="Demographic-Constrained MVLQ",
+                category="Conditional Bayesian preference estimation",
+                summary=(
+                    "조건부 StyleGAN W prior의 whitened theta 공간에서 한 직선의 "
+                    "후보를 제안하고, 모든 후보가 성별·인종 기준을 만족할 때까지 "
+                    "공통 반경을 줄입니다."
+                ),
+                parameters=(),
+                speed_tier="fastest",
+                speed_label="후보 bank 없이 직선 후보 직접 생성",
+            ),
+        )
     return (
         AlgorithmSpec(
             key="mvlq",

@@ -19,6 +19,11 @@ from core.benchmark_strategies import (
     TRCBStrategy,
 )
 from core.pca_utils import LatentProjector
+from core.mvlq import maximum_variance_direction, line_coefficients
+from core.preference_posterior import GaussianPreferencePosterior
+from core.conditional_prior import ConditionalPCAPrior
+from core.constrained_mvlq import DemographicConstrainedMVLQ
+from core.demographic_classifier import DemographicClassifier
 
 
 @dataclass
@@ -27,6 +32,7 @@ class ProposalBatch:
     features: np.ndarray
     backend: str
     roles: list[str] | None = None
+    metadata: dict | None = None
 
 
 class MaximumVarianceLineQueryStrategy:
@@ -65,17 +71,11 @@ class MaximumVarianceLineQueryStrategy:
         state = self._load_or_initialize_state(state_path, center_feature)
         posterior_map = np.asarray(state["map"], dtype=np.float64)
         covariance = np.asarray(state["covariance"], dtype=np.float64)
-        eigenvalues, eigenvectors = np.linalg.eigh(
-            0.5 * (covariance + covariance.T)
-        )
-        direction = eigenvectors[:, int(np.argmax(eigenvalues))]
-        pivot = int(np.argmax(np.abs(direction)))
-        if direction[pivot] < 0:
-            direction = -direction
+        direction, _ = maximum_variance_direction(covariance)
 
         query_scale = max(float(sigma), 0.0)
         radius = float(state["radius0"]) * query_scale
-        coefficients = np.linspace(-1.0, 1.0, int(display_count), dtype=np.float64)
+        coefficients = line_coefficients(int(display_count))
         active_queries = (
             posterior_map[None, :]
             + radius * coefficients[:, None] * direction[None, :]
@@ -225,98 +225,164 @@ class MaximumVarianceLineQueryStrategy:
         history: list[dict],
         initial: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
-        identity = np.eye(len(prior_mean), dtype=np.float64)
-        prior_precision = np.linalg.inv(
-            prior_covariance + self.jitter * identity
+        return GaussianPreferencePosterior.fit(
+            prior_mean=prior_mean,
+            prior_covariance=prior_covariance,
+            history=history,
+            initial=initial,
+            jitter=self.jitter,
         )
-        estimate = np.asarray(initial, dtype=np.float64).copy()
-        for _ in range(50):
-            gradient, precision = self._gradient_and_precision(
-                estimate,
-                prior_mean,
-                prior_precision,
-                history,
-            )
-            step = np.linalg.solve(
-                precision + self.jitter * identity,
-                gradient,
-            )
-            if float(np.linalg.norm(step)) < 1e-7:
-                break
-            current_objective = self._log_posterior(
-                estimate,
-                prior_mean,
-                prior_precision,
-                history,
-            )
-            step_scale = 1.0
-            while step_scale >= 1e-4:
-                candidate = estimate + step_scale * step
-                if self._log_posterior(
-                    candidate,
-                    prior_mean,
-                    prior_precision,
-                    history,
-                ) >= current_objective:
-                    estimate = candidate
-                    break
-                step_scale *= 0.5
-            else:
-                break
-        _, precision = self._gradient_and_precision(
-            estimate,
-            prior_mean,
-            prior_precision,
-            history,
+
+
+class DemographicConstrainedMVLQStrategy:
+    """Compatibility adapter exposing constrained theta-space MVLQ to the web app."""
+
+    name = "demographic_constrained_mvlq"
+
+    def __init__(
+        self,
+        generator: FaceGenerator,
+        prior: ConditionalPCAPrior,
+        classifier: DemographicClassifier,
+        parameters: dict | None = None,
+    ) -> None:
+        values = parameters or {}
+        self.generator = generator
+        self.prior = prior
+        self.beta = float(values.get("beta", 1.0))
+        self.distance_space = str(values.get("distance_space", "theta"))
+        self.engine = DemographicConstrainedMVLQ(
+            prior=prior,
+            generator=generator,
+            classifier=classifier,
+            gender_threshold=float(values.get("gender_threshold", 0.90)),
+            race_threshold=float(values.get("race_threshold", 0.80)),
+            backtrack_factor=float(values.get("backtrack_factor", 0.8)),
+            min_alpha=float(values.get("min_alpha", 0.1)),
+            max_backtracking_steps=int(
+                values.get("max_backtracking_steps", 15)
+            ),
+            center_candidates=int(values.get("center_candidates", 16)),
+            seed=int(values.get("seed", prior.seed)),
         )
-        covariance = np.linalg.inv(precision + self.jitter * identity)
-        return estimate, 0.5 * (covariance + covariance.T)
+
+    def propose(
+        self,
+        center: np.ndarray,
+        sigma: float,
+        count: int,
+        seed: int,
+        state_path: str | None = None,
+        round_id: int = 1,
+        display_count: int = 2,
+    ) -> ProposalBatch:
+        del center, count, round_id
+        if not state_path:
+            raise ValueError("Constrained MVLQ requires a persistent state path")
+        state = self._load_or_initialize_state(state_path)
+        self.engine.seed = int(seed)
+        radius = float(state["radius0"]) * max(float(sigma), 1e-6)
+        result = self.engine.propose(
+            posterior_map=np.asarray(state["map"], dtype=np.float64),
+            posterior_mean=np.asarray(state["map"], dtype=np.float64),
+            posterior_covariance=np.asarray(
+                state["covariance"], dtype=np.float64
+            ),
+            count=int(display_count),
+            radius=radius,
+        )
+        return ProposalBatch(
+            latents=result.w_queries,
+            features=result.theta_queries,
+            backend=self.name,
+            roles=[
+                f"conditional_mvlq_b={coefficient:.6f}_alpha={result.common_alpha:.6f}"
+                for coefficient in result.coefficients
+            ],
+            metadata=result.metadata(),
+        )
+
+    def update(
+        self,
+        center: np.ndarray,
+        sigma: float,
+        shown_latents: np.ndarray,
+        winner_latent: np.ndarray,
+        state_path: str | None = None,
+    ) -> tuple[np.ndarray, float]:
+        del center, sigma
+        if not state_path:
+            raise ValueError("Constrained MVLQ requires a persistent state path")
+        state = self._load_state(state_path)
+        queries = np.asarray(
+            self.prior.w_to_theta(shown_latents), dtype=np.float64
+        )
+        winner = np.asarray(
+            self.prior.w_to_theta(np.atleast_2d(winner_latent))[0],
+            dtype=np.float64,
+        )
+        winner_index = int(np.argmin(np.linalg.norm(queries - winner, axis=1)))
+        history = list(state["history"])
+        history.append(
+            {"queries": queries.astype(np.float32), "winner_index": winner_index}
+        )
+        metric = (
+            np.eye(self.prior.dimension)
+            if self.distance_space == "theta"
+            else self.prior.transform_matrix.T @ self.prior.transform_matrix
+        )
+        posterior_map, covariance = GaussianPreferencePosterior.fit(
+            prior_mean=np.asarray(state["prior_mean"], dtype=np.float64),
+            prior_covariance=np.asarray(
+                state["prior_covariance"], dtype=np.float64
+            ),
+            history=history,
+            initial=np.asarray(state["map"], dtype=np.float64),
+            beta=self.beta,
+            metric=metric,
+        )
+        state["history"] = history
+        state["map"] = posterior_map.astype(np.float32)
+        state["covariance"] = covariance.astype(np.float32)
+        self._save_state(state_path, state)
+        return np.asarray(self.prior.theta_to_w(posterior_map), dtype=np.float32), 1.0
+
+    def _load_or_initialize_state(self, state_path: str) -> dict:
+        path = Path(state_path)
+        if path.exists():
+            return self._load_state(state_path)
+        state = {
+            "algorithm": self.name,
+            "version": 1,
+            "active_dimensions": self.prior.dimension,
+            "prior_mean": self.prior.theta_mean.astype(np.float32),
+            "prior_covariance": self.prior.theta_covariance.astype(np.float32),
+            "radius0": float(
+                np.sqrt(np.linalg.eigvalsh(self.prior.theta_covariance).max())
+            ),
+            "map": self.prior.theta_mean.astype(np.float32),
+            "covariance": self.prior.theta_covariance.astype(np.float32),
+            "history": [],
+        }
+        self._save_state(state_path, state)
+        return state
+
+    def _load_state(self, state_path: str) -> dict:
+        with Path(state_path).open("rb") as handle:
+            state = pickle.load(handle)
+        if (
+            state.get("algorithm") != self.name
+            or int(state.get("active_dimensions", -1)) != self.prior.dimension
+        ):
+            raise RuntimeError("Stored state is incompatible with constrained MVLQ")
+        return state
 
     @staticmethod
-    def _choice_probabilities(queries: np.ndarray, estimate: np.ndarray) -> np.ndarray:
-        logits = queries @ estimate - 0.5 * np.sum(queries * queries, axis=1)
-        logits -= float(np.max(logits))
-        probabilities = np.exp(logits)
-        return probabilities / float(np.sum(probabilities))
-
-    def _gradient_and_precision(
-        self,
-        estimate: np.ndarray,
-        prior_mean: np.ndarray,
-        prior_precision: np.ndarray,
-        history: list[dict],
-    ) -> tuple[np.ndarray, np.ndarray]:
-        gradient = -prior_precision @ (estimate - prior_mean)
-        precision = prior_precision.copy()
-        for observation in history:
-            queries = np.asarray(observation["queries"], dtype=np.float64)
-            winner_index = int(observation["winner_index"])
-            probabilities = self._choice_probabilities(queries, estimate)
-            expected_query = probabilities @ queries
-            gradient += queries[winner_index] - expected_query
-            centered = queries - expected_query[None, :]
-            precision += centered.T @ (probabilities[:, None] * centered)
-        return gradient, precision
-
-    def _log_posterior(
-        self,
-        estimate: np.ndarray,
-        prior_mean: np.ndarray,
-        prior_precision: np.ndarray,
-        history: list[dict],
-    ) -> float:
-        delta = estimate - prior_mean
-        value = -0.5 * float(delta @ prior_precision @ delta)
-        for observation in history:
-            queries = np.asarray(observation["queries"], dtype=np.float64)
-            winner_index = int(observation["winner_index"])
-            logits = queries @ estimate - 0.5 * np.sum(
-                queries * queries, axis=1
-            )
-            maximum = float(np.max(logits))
-            value += float(logits[winner_index] - maximum)
-            value -= float(np.log(np.exp(logits - maximum).sum()))
-        return value
+    def _save_state(state_path: str, state: dict) -> None:
+        path = Path(state_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("wb") as handle:
+            pickle.dump(state, handle)
 
 
 class DeepIECQueryStrategy:
@@ -670,11 +736,25 @@ def create_query_strategy(
     projector,
     mode: str | None = None,
     parameters: dict | None = None,
+    conditional_prior: ConditionalPCAPrior | None = None,
+    demographic_classifier: DemographicClassifier | None = None,
 ):
     selected_mode = mode or config.search.mode
     values = parameters or {}
     if selected_mode == "mvlq":
         return MaximumVarianceLineQueryStrategy(generator, projector, values)
+    if selected_mode == "demographic_constrained_mvlq":
+        if conditional_prior is None or demographic_classifier is None:
+            raise ValueError(
+                "demographic_constrained_mvlq requires a conditional prior "
+                "and demographic classifier"
+            )
+        return DemographicConstrainedMVLQStrategy(
+            generator,
+            conditional_prior,
+            demographic_classifier,
+            values,
+        )
     if selected_mode == "random":
         return RandomSearchStrategy(generator, projector, values)
     if selected_mode == "axis_pair":
