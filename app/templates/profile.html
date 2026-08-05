@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}선호 프로필 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="content-card profile-card">
+  <div class="step-label">STEP 4 · 클릭 기반 선호 프로필</div>
+  <h1>선호하는 특징을 선택해 주세요</h1>
+  <p class="lead compact-lead">각 항목에서 최대 2개까지 선택할 수 있습니다.</p>
+  <form method="post" action="/profile" data-chip-form data-single-submit>
+    <div class="profile-categories">
+      {% for category, options in categories.items() %}
+        <fieldset class="chip-category" data-chip-category>
+          <legend><span>{{ "%02d"|format(loop.index) }}</span>{{ category }}</legend>
+          <div class="chip-row">
+            {% for option in options %}
+              <label class="chip">
+                <input type="checkbox" name="category::{{ category }}" value="{{ option }}" {% if option in selected_values %}checked{% endif %}>
+                <span>{{ option }}</span>
+              </label>
+            {% endfor %}
+          </div>
+          <small><b data-chip-count>0</b>/2 선택</small>
+        </fieldset>
+      {% endfor %}
+    </div>
+    <div class="button-row sticky-actions">
+      <button class="button button-secondary" type="button" onclick="history.back()">이전</button>
+      <button class="button button-primary" type="submit">다음</button>
+    </div>
+  </form>
+</section>
+{% endblock %}
+

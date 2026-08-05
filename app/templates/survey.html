@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}최종 설문 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="content-card narrow">
+  <div class="step-label">STEP 6 · 최종 설문</div>
+  <h1>마지막으로 경험을 평가해 주세요</h1>
+  <p class="muted">1 전혀 그렇지 않다 · 7 매우 그렇다</p>
+  <form method="post" action="/survey" class="stack-form survey-form" data-single-submit>
+    {% set questions = [
+      "실험 절차를 이해하기 쉬웠다.",
+      "AI가 나의 취향을 어느 정도 반영했다고 느꼈다.",
+      "응답 과정이 지나치게 부담스럽지 않았다.",
+      "비슷한 연구에 다시 참여할 의향이 있다."
+    ] %}
+    {% for question in questions %}
+      {% set question_index = loop.index %}
+      <fieldset>
+        <legend><span class="question-number">{{ "%02d"|format(loop.index) }}</span>{{ question }}</legend>
+        <div class="scale-row seven">
+          {% for value in range(1, 8) %}
+            <label><input type="radio" name="q{{ question_index }}" value="{{ value }}" required><span>{{ value }}</span></label>
+          {% endfor %}
+        </div>
+      </fieldset>
+    {% endfor %}
+    <label class="text-label" for="free_text">자유 의견 <span>선택</span></label>
+    <textarea id="free_text" name="free_text" rows="5" maxlength="2000" placeholder="불편했던 점이나 개선 의견을 자유롭게 적어 주세요."></textarea>
+    <button class="button button-primary button-large" type="submit">제출하기</button>
+  </form>
+</section>
+{% endblock %}

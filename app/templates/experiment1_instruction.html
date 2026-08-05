@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}실험 1 안내 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="content-card narrow instruction-card">
+  <div class="step-label">STEP 2 · 실험 1</div>
+  <span class="condition-badge">사이즈 블록 {{ block_number }}/{{ total_blocks }} · 한 번에 {{ m_value }}개 표시 (M={{ m_value }})</span>
+  <h1>가장 마음에 드는 얼굴을<br>하나 선택해 주세요</h1>
+  <div class="instruction-list">
+    <div><span>01</span><p>매 라운드마다 동아시아 인상 하드 필터를 통과한 성인 얼굴 {{ m_value }}개가 제시됩니다.</p></div>
+    <div><span>02</span><p>그중 가장 마음에 드는 얼굴 하나를 고르고 선택 난이도를 평가합니다.</p></div>
+    <div><span>03</span><p>정답은 없습니다. 오래 고민하기보다 첫인상에 따라 선택해 주세요.</p></div>
+  </div>
+  <div class="notice subtle">이 블록은 총 {{ rounds }}라운드입니다. 라운드 시간은 화면에 표시되지 않습니다.</div>
+  {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+  <form method="post" action="/experiment1/start" data-single-submit>
+    <input type="hidden" name="block_index" value="{{ block.sequence_index if block else block_number - 1 }}">
+    <div class="locked-algorithm">
+      <strong>{{ algorithm.label }}</strong>
+      <span>{{ algorithm.summary }}</span>
+    </div>
+    {% if block %}
+      <div class="notice subtle">이 블록에 저장된 posterior 상태를 이어서 진행합니다.</div>
+    {% endif %}
+    <button class="button button-primary button-large" type="submit">실험 1 시작하기</button>
+  </form>
+</section>
+{% endblock %}

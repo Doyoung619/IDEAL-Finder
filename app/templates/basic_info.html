@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}기본 정보 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="content-card narrow">
+  <div class="step-label">STEP 1 · 기본 정보</div>
+  <h1>간단한 정보를 알려주세요</h1>
+  <p class="muted">응답은 추천 조건 구성과 연구 분석에만 사용됩니다.</p>
+  <form method="post" action="/basic-info" class="stack-form" data-single-submit>
+    <fieldset>
+      <legend>연령대</legend>
+      <div class="choice-row">
+        {% for value, label in [("20s", "20대"), ("30s", "30대"), ("40s", "40대"), ("50plus", "50대 이상")] %}
+          <label class="choice-pill"><input type="radio" name="age_band" value="{{ value }}" required><span>{{ label }}</span></label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>참여자 성별</legend>
+      <div class="choice-row">
+        {% for value, label in [("male", "남성"), ("female", "여성"), ("other", "기타/응답하지 않음")] %}
+          <label class="choice-pill"><input type="radio" name="gender" value="{{ value }}" required><span>{{ label }}</span></label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>선호하는 대상 성별</legend>
+      <div class="choice-row">
+        {% for value, label in [("male", "남성"), ("female", "여성"), ("any", "성별 무관")] %}
+          <label class="choice-pill"><input type="radio" name="preferred_target_gender" value="{{ value }}" required><span>{{ label }}</span></label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    <div class="notice subtle">
+      생성 얼굴 범위는 동아시아 인상으로 고정됩니다. OpenCLIP 외형 분류를 하드 필터로 사용하며, 실제 국적이나 민족을 판정하는 기능은 아닙니다.
+    </div>
+    <fieldset>
+      <legend>선호하는 성인 연령 인상 <span class="legend-hint">미성년자 차단은 모든 설정에서 유지됩니다</span></legend>
+      <div class="choice-row">
+        {% for value, label in [
+          ("twenties_boost", "20대 성인 중심"),
+          ("twenties_thirties", "20~30대 섞기"),
+          ("any_adult", "성인이면 제한 없음")
+        ] %}
+          <label class="choice-pill">
+            <input
+              type="radio"
+              name="preferred_age_appearance"
+              value="{{ value }}"
+              {% if value == "twenties_boost" %}checked{% endif %}
+              required
+            >
+            <span>{{ label }}</span>
+          </label>
+        {% endfor %}
+      </div>
+      <p class="field-help">나이는 실제 신분 정보가 아니라 생성 얼굴의 외형을 OpenCLIP으로 추정한 값입니다.</p>
+    </fieldset>
+    <fieldset>
+      <legend>연애 경험</legend>
+      <div class="choice-row">
+        {% for value, label in [("none", "없음"), ("past", "과거에 있음"), ("current", "현재 연애 중")] %}
+          <label class="choice-pill"><input type="radio" name="dating_experience" value="{{ value }}" required><span>{{ label }}</span></label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>평소 사진 선택에서 외모가 얼마나 중요한가요? <span class="legend-hint">1 낮음 · 5 높음</span></legend>
+      <div class="scale-row five">
+        {% for value in range(1, 6) %}
+          <label><input type="radio" name="image_selection_importance" value="{{ value }}" required><span>{{ value }}</span></label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    <label class="consent-check compact">
+      <input type="checkbox" name="honest" value="yes" required>
+      <span>가능한 한 솔직하고 직관적으로 선택하겠습니다.</span>
+    </label>
+    <div class="button-row">
+      <a class="button button-secondary" href="/">이전</a>
+      <button class="button button-primary" type="submit">다음</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

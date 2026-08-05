@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}연구자 관리 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="wide-section admin-section">
+  <div class="experiment-toolbar">
+    <div>
+      <div class="step-label">RESEARCHER ADMIN</div>
+      <h1>실험 로그</h1>
+      <p class="muted">이 페이지는 로컬 연구자용입니다. 외부 배포 시 인증을 추가하세요.</p>
+    </div>
+    <div class="button-row">
+      <a class="button button-secondary" href="/">새 참여자 화면</a>
+      <a class="button button-primary" href="/admin/export.zip">전체 CSV 내보내기</a>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>참여 코드</th>
+          <th>상태</th>
+          <th>생성 이미지</th>
+          <th>실험 1 선택</th>
+          <th>시작 시각</th>
+          <th>완료 시각</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td><strong>{{ row.participant.participant_id }}</strong></td>
+            <td><span class="status status-{{ row.participant.status }}">{{ row.participant.status }}</span></td>
+            <td>{{ row.image_count }}</td>
+            <td>{{ row.selection_count }}</td>
+            <td>{{ row.participant.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+            <td>{{ row.participant.completed_at.strftime("%Y-%m-%d %H:%M") if row.participant.completed_at else "—" }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="6" class="empty-cell">아직 참여자 데이터가 없습니다.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+

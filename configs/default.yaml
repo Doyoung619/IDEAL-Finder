@@ -1,0 +1,88 @@
+app:
+  name: "이상형 탐지기"
+  host: "127.0.0.1"
+  port: 8000
+  secret_key: "change-this-before-data-collection"
+  debug: false
+
+database:
+  url: "sqlite:///data/ideal_type_detector.sqlite3"
+
+paths:
+  data_dir: "data"
+  cache_dir: "cache"
+  output_dir: "outputs"
+  model_dir: "models"
+
+generator:
+  mode: "stylegan2_ada"
+  device: "auto"
+  output_resolution: 256
+  batch_size: 8
+  truncation_psi: 0.7
+  noise_mode: "const"
+  stylegan_repo: "models/stylegan2-ada-pytorch"
+  network_path: "models/stylegan2-ffhq-256x256.pkl"
+  network_url: "https://api.ngc.nvidia.com/v2/models/nvidia/research/stylegan2/versions/1/files/stylegan2-ffhq-256x256.pkl"
+  demo_latent_dim: 32
+
+experiment:
+  seed: 20260730
+  m_list: [2, 4, 8, 16]
+  rounds_per_m: 12
+  answer_key_faces: 20
+  recommendation_conditions: ["none", "basic_info", "click_profile", "selection_history"]
+  recommendation_batches_per_condition: 1
+  recommendation_set_size: 16
+  candidate_pool_size: 64
+  candidate_pool_multiplier: 4
+  direct_candidate_pool_minimum: 16
+  direct_candidate_pool_multiplier: 3
+
+search:
+  version: "mvlq_v1_east_asian_only"
+  mode: "mvlq"
+  pca_dimensions: 32
+  pca_fit_samples: 512
+  mutation_probability: 0.50
+  random_immigration_probability: 0.10
+  initial_mutation_scale: 0.50
+  mutation_decay: 0.95
+  minimum_mutation_scale: 0.10
+  duplicate_distance: 0.15
+  alpha: 0.35
+  sigma0: 0.30
+  decay: 0.95
+  min_sigma: 0.08
+  exploration_fraction: 0.25
+  exploration_scale: 2.5
+
+filters:
+  minimum_quality: 0.18
+  gender_confidence_threshold: 0.58
+  adult_confidence_threshold: 0.56
+  portrait_confidence_threshold: 0.50
+  east_asian_confidence_threshold: 0.50
+  east_asian_boost_fraction: 0.75
+  balanced_east_asian_fraction: 0.40
+  twenties_boost_fraction: 0.75
+  twenties_thirties_fraction: 0.90
+  east_asian_candidate_pool_minimum: 512
+  max_filter_attempts: 4
+  strict_gender: true
+
+clip:
+  enabled: true
+  model_name: "ViT-B-32"
+  pretrained: "laion2b_s34b_b79k"
+  device: "auto"
+  batch_size: 16
+
+demo:
+  m_list: [2, 4, 8, 16]
+  rounds_per_m: 1
+  answer_key_faces: 3
+  recommendation_batches_per_condition: 1
+  recommendation_set_size: 4
+  candidate_pool_size: 32
+  candidate_pool_multiplier: 4

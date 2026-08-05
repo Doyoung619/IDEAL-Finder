@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}참여 완료 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="hero-card completion-card">
+  <div class="completion-mark">✓</div>
+  <div class="eyebrow">EXPERIMENT COMPLETE</div>
+  <h1>참여해 주셔서<br>감사합니다</h1>
+  <p class="lead">모든 응답과 얼굴별 잠재벡터가 안전하게 저장되었습니다.</p>
+  <div class="completion-details">
+    <div><span>참여 코드</span><strong>{{ participant.participant_id }}</strong></div>
+    <div><span>제출 시각</span><strong>{{ submitted_at.strftime("%Y-%m-%d %H:%M") }} UTC</strong></div>
+  </div>
+  <form method="post" action="/new-participant" data-single-submit>
+    <button class="button button-primary button-large" type="submit">종료</button>
+  </form>
+</section>
+{% endblock %}
+

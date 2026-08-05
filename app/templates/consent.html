@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}연구 참여 안내 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="hero-card">
+  <div class="eyebrow">HUMAN–AI PREFERENCE STUDY</div>
+  <h1>나의 이상형은<br>어떤 얼굴에 가까울까요?</h1>
+  <p class="lead">생성형 AI가 만든 성인 얼굴을 선택하며 개인의 시각적 선호를 탐색하는 연구입니다.</p>
+  <div class="info-grid">
+    <div><strong>약 20–30분</strong><span>예상 소요 시간</span></div>
+    <div><strong>익명 참여</strong><span>개인 식별정보 미수집</span></div>
+    <div><strong>직관적 선택</strong><span>정답 없는 선호 판단</span></div>
+  </div>
+  <div class="notice">
+    이 프로토타입은 성인 참여자를 대상으로 합니다. 생성된 얼굴은 실제 인물이 아니며 연구 목적으로만 사용됩니다.
+  </div>
+  <form method="post" action="/consent" class="stack-form" data-single-submit>
+    <label class="consent-check">
+      <input type="checkbox" name="consent" value="yes" required>
+      <span>연구 설명을 읽었으며 자발적으로 참여하는 데 동의합니다.</span>
+    </label>
+    <button class="button button-primary button-large" type="submit">동의하고 시작하기</button>
+  </form>
+</section>
+{% endblock %}
+

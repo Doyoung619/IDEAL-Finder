@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}선호 기준 평가 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="content-card rating-stage">
+  <div class="step-label">STEP 3 · 개인 선호 기준 만들기</div>
+  <div class="progress-line"><span style="width: {{ (index / total * 100)|round }}%"></span></div>
+  <p class="progress-copy">{{ index }} / {{ total }}</p>
+  <h1>이 얼굴은 당신의 이상형에<br>얼마나 부합하나요?</h1>
+  <img class="single-face" src="{{ image.url }}" alt="잠재벡터로 새로 생성된 성인 얼굴">
+  <form method="post" action="/answer-key" class="stack-form" data-single-submit>
+    <input type="hidden" name="image_id" value="{{ image.id }}">
+    <fieldset>
+      <legend class="centered">1 전혀 아님 · 10 매우 가까움</legend>
+      <div class="scale-row ten">
+        {% for value in range(1, 11) %}
+          <label><input type="radio" name="rating" value="{{ value }}" required><span>{{ value }}</span></label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    <button class="button button-primary" type="submit">다음 얼굴 평가</button>
+  </form>
+</section>
+{% endblock %}
+

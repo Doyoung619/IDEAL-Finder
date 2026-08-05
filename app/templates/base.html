@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
+  <script defer src="{{ url_for('static', path='app.js') }}"></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">
+      <span class="brand-mark">IF</span>
+      <span>{{ app_name }}</span>
+    </a>
+    {% if participant %}
+      <span class="participant-code">참여 코드 {{ participant.participant_id }}</span>
+    {% endif %}
+  </header>
+  <main class="page-shell">
+    {% if error %}
+      <div class="alert" role="alert">{{ error }}</div>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="site-footer">
+    연구용 프로토타입 · 모든 자극 이미지는 저장된 잠재벡터에서 생성됩니다.
+  </footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
+

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}추천 평가 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="wide-section">
+  <div class="experiment-toolbar">
+    <div>
+      <div class="step-label">STEP 5 · 실험 2</div>
+      <span class="condition-badge">{{ condition_label }}</span>
+      <h1>추천 얼굴 묶음을 평가해 주세요</h1>
+      <p class="muted">가장 마음에 드는 얼굴 하나를 먼저 선택하세요.</p>
+    </div>
+    <div class="round-status">
+      <strong>추천 묶음 {{ progress_current }} / {{ progress_total }}</strong>
+    </div>
+  </div>
+  <form method="post" action="/experiment2" data-selection-form data-single-submit>
+    <input type="hidden" name="batch_id" value="{{ batch_id }}">
+    <input type="hidden" name="selected_image_id" data-selected-input>
+    <input type="hidden" name="reaction_time_sec" data-reaction-input>
+    <div class="face-grid recommendation-grid">
+      {% for card in cards %}
+        <button type="button" class="face-card selectable-card" data-image-id="{{ card.id }}" aria-label="추천 얼굴 {{ loop.index }} 선택">
+          <img src="{{ card.url }}" alt="추천된 생성 얼굴 {{ loop.index }}" draggable="false">
+          <span class="selection-check">✓</span>
+          <span class="face-number">{{ "%02d"|format(loop.index) }}</span>
+        </button>
+      {% endfor %}
+    </div>
+    <div class="center-actions">
+      <button class="button button-secondary" type="button" data-reveal-evaluation disabled>선택한 얼굴 평가하기</button>
+    </div>
+    <div class="recommendation-evaluation" data-evaluation-panel hidden>
+      <fieldset>
+        <legend>이 추천 묶음에는 당신의 이상형이 포함되어 있나요?</legend>
+        <div class="choice-row centered-row">
+          <label class="choice-pill"><input type="radio" name="contains_ideal_type" value="yes" required><span>예</span></label>
+          <label class="choice-pill"><input type="radio" name="contains_ideal_type" value="no" required><span>아니요</span></label>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>선택한 얼굴은 이상형에 얼마나 가깝나요? <span class="legend-hint">1~10</span></legend>
+        <div class="scale-row ten">
+          {% for value in range(1, 11) %}
+            <label><input type="radio" name="rating" value="{{ value }}" required><span>{{ value }}</span></label>
+          {% endfor %}
+        </div>
+      </fieldset>
+      <button class="button button-primary" type="submit" disabled data-require-selection>다음 추천 묶음</button>
+    </div>
+  </form>
+</section>
+{% endblock %}
