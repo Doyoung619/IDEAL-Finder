@@ -27,6 +27,9 @@ def test_demo_flow_reaches_first_generated_round(tmp_path):
     with TestClient(app) as client:
         response = client.get("/")
         assert response.status_code == 200
+        assert 'class="loading-screen"' in response.text
+        assert "app.css?v=4" in response.text
+        assert "app.js?v=4" in response.text
         assert "동의하고 시작하기" in response.text
 
         response = client.post(

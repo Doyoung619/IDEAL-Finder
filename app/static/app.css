@@ -85,10 +85,13 @@ button, input, textarea { font: inherit; }
   padding: 20px;
   background: rgba(22, 25, 32, 0.24);
   opacity: 0;
+  pointer-events: none;
   transition: opacity 180ms ease;
 }
 
+.loading-screen[hidden] { display: none; }
 .loading-screen.is-visible { opacity: 1; }
+.loading-screen.is-visible { pointer-events: auto; }
 
 .loading-card {
   width: min(280px, 100%);
