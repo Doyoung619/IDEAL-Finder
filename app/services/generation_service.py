@@ -263,6 +263,9 @@ def _generate_entropy_round(
     image_directory.mkdir(parents=True, exist_ok=True)
     np.save(round_directory / "query_points.npy", display_features)
     np.save(round_directory / "query_center.npy", prior.theta_mean)
+    np.save(round_directory / "posterior_mean.npy", prior.theta_mean)
+    np.save(round_directory / "posterior_covariance.npy", prior.theta_covariance)
+    np.save(round_directory / "map_estimate.npy", prior.theta_mean)
     artifacts: list[LatentImage] = []
     for display_index, candidate in enumerate(display_candidates):
         candidate.image.save(
