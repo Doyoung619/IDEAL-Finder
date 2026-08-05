@@ -11,10 +11,10 @@ python scripts\prepare_initial_cache.py
 이 명령은 다음을 수행합니다.
 
 - 고정 seed로 latent PCA 준비
-- `female`, `male` 각각 64개의 하드필터 통과 후보 생성
+- `female`, `male` 각각 12개의 하드필터 통과 후보 생성
 - 후보 latent와 필터 판정 metadata만 압축 저장
 - 실제 얼굴 PNG는 저장하지 않음
 
-앱은 `data/precomputed/initial_female_east_asian_20s.npz` 또는 `initial_male_east_asian_20s.npz`가 있으면 첫 라운드에서 후보를 다시 CLIP 평가하지 않고, 필요한 얼굴만 StyleGAN으로 즉시 복원합니다. 캐시가 없거나 모델/config가 바뀌면 기존 안전한 생성 경로로 자동 fallback합니다.
+앱은 `data/precomputed/initial_female_east_asian_20s.npz` 또는 `initial_male_east_asian_20s.npz`가 있으면 첫 `M=2` 라운드와 baseline 후보를 다시 CLIP 평가하지 않고, 필요한 얼굴만 StyleGAN으로 즉시 복원합니다. 이후 큰 M에서 캐시가 부족하면 기존 안전한 생성 경로로 자동 fallback합니다.
 
 캐시는 로컬 실행 산출물이므로 Git에 커밋하지 않습니다. 캐시를 다시 만들려면 `data/precomputed/`의 해당 파일을 지우고 명령을 재실행하면 됩니다.
