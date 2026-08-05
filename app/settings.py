@@ -107,6 +107,8 @@ def load_config(
         for key, value in values["demo"].items():
             if key in values["experiment"]:
                 values["experiment"][key] = value
+            elif key == "query":
+                values["query"].update(value)
 
     for key in ("data_dir", "cache_dir", "output_dir", "model_dir"):
         values["paths"][key] = _resolve_project_path(values["paths"][key])

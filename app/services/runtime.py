@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+
 from core.adult_control import AdultFaceController
 from core.age_appearance_control import AgeAppearanceController
 from core.clip_ranker import CLIPRanker
@@ -12,8 +14,7 @@ from core.generator import create_generator
 from core.pca_utils import LatentProjector
 from core.portrait_control import PortraitQualityController
 from core.query_strategy import create_query_strategy
-from core.conditional_prior import ConditionalPCAPrior
-from core.demographic_classifier import FairFaceDemographicClassifier
+from core.conditional_prior import ConditionalPCAPrior, DemographicCondition
 
 
 class ExperimentRuntime:
@@ -53,9 +54,7 @@ class ExperimentRuntime:
         self.quality_filter = FaceQualityFilter(
             minimum_quality=config.filters.minimum_quality
         )
-        self.query_strategy = None
         self._conditional_priors = {}
-        self._demographic_classifiers = {}
 
     def ensure_ready(self) -> None:
         self.projector.ensure_fitted(
@@ -63,36 +62,11 @@ class ExperimentRuntime:
             sample_count=self.config.search.pca_fit_samples,
             seed=self.config.experiment.seed,
         )
-        if self.query_strategy is None:
-            self.query_strategy = create_query_strategy(
-                self.config,
-                self.generator,
-                self.projector,
-            )
 
     def strategy_for(self, mode: str, parameters: dict):
-        self.ensure_ready()
-        conditional_prior = None
-        demographic_classifier = None
-        if mode == "demographic_constrained_mvlq":
-            configured = {
-                "gender_threshold": self.config.demographic.gender_threshold,
-                "race_threshold": self.config.demographic.race_threshold,
-                "backtrack_factor": self.config.query.backtrack_factor,
-                "min_alpha": self.config.query.min_alpha,
-                "max_backtracking_steps": (
-                    self.config.query.max_backtracking_steps
-                ),
-                "center_candidates": self.config.query.center_candidates,
-                "beta": self.config.preference.beta,
-                "distance_space": self.config.preference.distance_space,
-                "seed": self.config.conditional_prior.seed,
-            }
-            configured.update(parameters)
-            parameters = configured
-            conditional_prior, demographic_classifier = (
-                self.conditional_components(parameters)
-            )
+        if self.config.query.algorithm != "entropy" or mode != "entropy":
+            raise ValueError("Only the entropy query algorithm is currently supported.")
+        conditional_prior = self.conditional_prior(parameters)
         return create_query_strategy(
             self.config,
             self.generator,
@@ -100,11 +74,12 @@ class ExperimentRuntime:
             mode=mode,
             parameters=parameters,
             conditional_prior=conditional_prior,
-            demographic_classifier=demographic_classifier,
         )
 
-    def conditional_components(self, parameters: dict | None = None):
-        """Load the configured prior and FairFace adapter on first constrained use."""
+    def conditional_prior(
+        self, parameters: dict | None = None
+    ) -> ConditionalPCAPrior:
+        """Load the requested condition prior or create the deterministic demo prior."""
         values = parameters or {}
         condition_gender = str(
             values.get("condition_gender", self.config.demographic.gender)
@@ -124,7 +99,26 @@ class ExperimentRuntime:
             race="_".join(condition_races),
         )
         if prior_path not in self._conditional_priors:
-            prior = ConditionalPCAPrior.load(prior_path)
+            if self.config.generator.mode == "demo":
+                dimension = min(
+                    int(self.config.conditional_prior.dimension),
+                    int(self.generator.latent_dim),
+                )
+                prior = ConditionalPCAPrior(
+                    condition=DemographicCondition(
+                        condition_gender, condition_races
+                    ),
+                    mu_w=np.zeros(self.generator.latent_dim),
+                    components=np.eye(self.generator.latent_dim)[:dimension],
+                    eigenvalues=np.ones(dimension),
+                    explained_variance_ratio=np.full(
+                        dimension, 1.0 / dimension
+                    ),
+                    accepted_samples=1,
+                    seed=int(self.config.query.seed),
+                )
+            else:
+                prior = ConditionalPCAPrior.load(prior_path)
             if prior.w_dimension != self.generator.latent_dim:
                 raise ValueError(
                     "Conditional prior W dimension does not match the generator"
@@ -137,20 +131,4 @@ class ExperimentRuntime:
                     f"gender/races: {condition_gender}/{condition_races}"
                 )
             self._conditional_priors[prior_path] = prior
-        weights = str(
-            values.get(
-                "fairface_weights", self.config.demographic.weights
-            )
-        )
-        if self.config.demographic.classifier != "fairface":
-            raise ValueError("Only the 'fairface' demographic classifier is supported")
-        if weights not in self._demographic_classifiers:
-            self._demographic_classifiers[weights] = FairFaceDemographicClassifier(
-                weights_path=weights,
-                device=self.config.demographic.device,
-                batch_size=self.config.demographic.batch_size,
-            )
-        return (
-            self._conditional_priors[prior_path],
-            self._demographic_classifiers[weights],
-        )
+        return self._conditional_priors[prior_path]

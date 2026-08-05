@@ -22,7 +22,6 @@ from app.services.participant_service import m_order
 from app.services.profile_service import build_profile_prompt
 from core.latent_sampler import farthest_point_sampling
 from core.preference_model import PairwisePreferenceModel
-from core.query_strategy import ProposalBatch
 from core.utils import latent_fingerprint
 from experiments.design import stable_seed
 from experiments.logging_utils import json_dumps, json_loads
@@ -138,10 +137,16 @@ def get_or_create_block(
     existing = db.get(ExperimentBlock, block_id)
     if existing is not None:
         return existing
-    if strategy_mode is None or strategy_parameters is None:
-        raise ValueError("Algorithm selection is required before creating a block")
+    selected_mode = strategy_mode or "entropy"
+    if selected_mode != "entropy":
+        raise ValueError("Only the entropy query algorithm is currently supported.")
+    strategy_parameters = strategy_parameters or {}
 
-    baseline = ensure_participant_baseline(db, runtime, participant)
+    conditional_prior = runtime.conditional_prior(strategy_parameters)
+    baseline = np.asarray(
+        conditional_prior.theta_to_w(conditional_prior.theta_mean),
+        dtype=np.float32,
+    )
     block_dir = (
         Path(runtime.config.paths.output_dir)
         / participant.participant_id
@@ -153,7 +158,7 @@ def get_or_create_block(
     block_dir.mkdir(parents=True, exist_ok=True)
     np.save(mu_path, baseline.astype(np.float32))
     initial_seed = stable_seed(
-        f"{participant.participant_id}:benchmark-initial",
+        f"{participant.participant_id}:entropy-initial",
         participant.base_seed,
     )
     block = ExperimentBlock(
@@ -161,11 +166,11 @@ def get_or_create_block(
         participant_id=participant.participant_id,
         sequence_index=sequence_index,
         m_value=m_value,
-        strategy_mode=strategy_mode,
+        strategy_mode=selected_mode,
         initial_state_id=latent_fingerprint(baseline),
         initial_seed=initial_seed,
         mu_path=str(mu_path),
-        sigma=float(_initial_strategy_scale(strategy_mode, strategy_parameters)),
+        sigma=1.0,
         strategy_state_path=str(state_path),
         strategy_parameters_json=json_dumps(strategy_parameters),
     )
@@ -210,261 +215,87 @@ def generate_experiment_round(
     if existing:
         return existing
 
-    runtime.ensure_ready()
+    if block.strategy_mode != "entropy":
+        raise ValueError("Only the entropy query algorithm is currently supported.")
+    return _generate_entropy_round(
+        db=db,
+        runtime=runtime,
+        participant=participant,
+        block=block,
+        round_id=round_id,
+    )
+
+
+def _generate_entropy_round(
+    db: Session,
+    runtime,
+    participant: Participant,
+    block: ExperimentBlock,
+    round_id: int,
+) -> list[LatentImage]:
+    """Optimize, decode, persist, and return one direct synthetic query set."""
     strategy_parameters = json_loads(block.strategy_parameters_json or "{}")
-    strategy = runtime.strategy_for(block.strategy_mode, strategy_parameters)
+    strategy = runtime.strategy_for("entropy", strategy_parameters)
     center = np.load(block.mu_path)
-    m_value = block.m_value
-    line_modes = {"mvlq", "demographic_constrained_mvlq"}
-    direct_modes = {
-        "mvlq",
-        "demographic_constrained_mvlq",
-        "fast_direct",
-        "heuristic",
-        "axis_pair",
-        "banditbo",
-        "sequential_gallery",
-    }
-    if block.strategy_mode in line_modes:
-        pool_size = m_value
-    elif block.strategy_mode in direct_modes or (
-        block.strategy_mode == "deepiec_mutation" and round_id > 1
-    ):
-        pool_size = max(
-            int(runtime.config.experiment.direct_candidate_pool_minimum),
-            m_value
-            * int(runtime.config.experiment.direct_candidate_pool_multiplier),
-        )
-    else:
-        pool_size = max(
-            m_value * runtime.config.experiment.candidate_pool_multiplier,
-            runtime.config.experiment.candidate_pool_size,
-            4 if block.strategy_mode == "cmaes" else m_value,
-        )
-    needs_large_region_pool = block.strategy_mode in {
-        "random",
-        "linear_ucb",
-        "simplebo",
-        "qeubo",
-        "trcb",
-        "cmaes",
-    } or (block.strategy_mode == "deepiec_mutation" and round_id == 1)
-    has_demographic_boost = (
-        participant.preferred_face_region != "unrestricted"
-        or participant.preferred_age_appearance != "any_adult"
-    )
-    if has_demographic_boost and needs_large_region_pool:
-        pool_size = _region_pool_size(
-            runtime,
-            participant.preferred_face_region,
-            participant.preferred_age_appearance,
-            pool_size,
-            required_count=m_value,
-        )
-    pool_size = max(
-        pool_size,
-        int(strategy_parameters.get("candidate_pool_size", 0)),
-        int(strategy_parameters.get("bank_size", 0))
-        if block.strategy_mode == "trcb"
-        else 0,
-    )
     seed = (
         block.initial_seed
         if round_id == 1
         else stable_seed(
-            f"{block.block_id}:round:{round_id}",
-            participant.base_seed,
+            f"{block.block_id}:round:{round_id}", participant.base_seed
         )
     )
-    duplicate_distance = (
-        0.0
-        if block.strategy_mode in line_modes
-        else float(
-            strategy_parameters.get(
-                "duplicate_distance",
-                runtime.config.search.duplicate_distance,
-            )
-        )
+    proposal = strategy.propose(
+        center=center,
+        sigma=1.0,
+        count=block.m_value,
+        seed=seed,
+        state_path=block.strategy_state_path,
+        round_id=round_id,
+        display_count=block.m_value,
     )
-    proposal_attempts = 0
-    current_pool_size = pool_size
-    maximum_pool_size = max(pool_size, 512)
-    maximum_attempts = (
-        12
-        if block.strategy_mode in line_modes
-        else int(runtime.config.filters.max_filter_attempts)
-    )
-    query_scale = 1.0
-    while True:
-        proposal_seed = seed + proposal_attempts * 15485863
-        query_scale = (
-            max(0.01, 0.70**proposal_attempts)
-            if block.strategy_mode in line_modes
-            else block.sigma
-        )
-        proposal = _propose_block_population(
-            strategy,
-            block,
-            center,
-            current_pool_size,
-            proposal_seed,
-            round_id,
-            m_value,
-            query_scale=query_scale,
-        )
-        evaluated = evaluate_candidates(runtime, proposal.latents)
-        if block.strategy_mode == "demographic_constrained_mvlq":
-            selection_features = proposal.features
-            strict_indices = list(range(len(proposal.latents)))
-        else:
-            selection_features = runtime.projector.transform(proposal.latents)
-            strict_indices = strict_candidate_indices(
-                runtime,
-                evaluated,
-                participant.preferred_target_gender,
-            )
-        candidate_indices = unique_candidate_indices(
-            selection_features,
-            strict_indices,
-            threshold=duplicate_distance,
-        )
-        if len(candidate_indices) >= m_value:
-            proposal = ProposalBatch(
-                latents=proposal.latents,
-                features=selection_features,
-                backend=proposal.backend,
-                roles=proposal.roles,
-                metadata=proposal.metadata,
-            )
-            break
-        if (
-            proposal_attempts + 1 >= maximum_attempts
-            or (
-                block.strategy_mode not in line_modes
-                and current_pool_size >= maximum_pool_size
-            )
-        ):
-            proposal = ProposalBatch(
-                latents=proposal.latents,
-                features=selection_features,
-                backend=proposal.backend,
-                roles=proposal.roles,
-                metadata=proposal.metadata,
-            )
-            break
-        proposal_attempts += 1
-        if block.strategy_mode not in line_modes:
-            current_pool_size = min(maximum_pool_size, current_pool_size * 2)
-
-    recovery_used = False
-    if len(candidate_indices) < m_value and block.strategy_mode not in line_modes:
-        proposal, evaluated, strict_indices = _append_filter_recovery_candidates(
-            runtime,
-            proposal,
-            evaluated,
-            center,
-            seed + 32452843,
-            m_value,
-            participant.preferred_target_gender,
-        )
-        recovery_used = True
-        candidate_indices = unique_candidate_indices(
-            proposal.features,
-            strict_indices,
-            threshold=duplicate_distance,
-        )
-
-    effective_duplicate_distance = duplicate_distance
-    if len(candidate_indices) < m_value and len(strict_indices) >= m_value:
-        for relaxed_distance in (
-            duplicate_distance * 0.5,
-            duplicate_distance * 0.25,
-            0.0,
-        ):
-            candidate_indices = unique_candidate_indices(
-                proposal.features,
-                strict_indices,
-                threshold=relaxed_distance,
-            )
-            effective_duplicate_distance = relaxed_distance
-            if len(candidate_indices) >= m_value:
-                break
-
-    if len(candidate_indices) < m_value:
+    if len(proposal.latents) != block.m_value:
         raise RuntimeError(
-            f"{block.strategy_mode} automatic recovery found only "
-            f"{len(candidate_indices)} hard-valid candidates for M={m_value}."
+            "Entropy Query returned an unexpected number of synthetic queries"
         )
-    preserve_indices: list[int] = []
-    if block.strategy_mode == "deepiec_mutation" and round_id > 1:
-        if 0 not in candidate_indices:
-            raise RuntimeError("The preserved DeepIEC elite failed hard filters")
-        preserve_indices = [0]
-    elif (
-        0 in candidate_indices
-        and (
-            block.strategy_mode in {"heuristic", "banditbo"}
-            or (
-                proposal.roles
-                and proposal.roles[0] in {"elite", "incumbent"}
-            )
-        )
-    ):
-        preserve_indices = [0]
-    selected_indices = (
-        candidate_indices[:m_value]
-        if block.strategy_mode in line_modes
-        else region_boosted_candidate_indices(
-            runtime,
-            evaluated,
-            candidate_indices,
-            required=m_value,
-            preference=participant.preferred_face_region,
-            age_preference=participant.preferred_age_appearance,
-            preserve_indices=preserve_indices,
-        )
+    evaluated = evaluate_candidates(runtime, proposal.latents)
+    round_directory = (
+        Path(block.strategy_state_path).parent / f"round_{round_id:02d}"
     )
-    relaxed = False
-
+    image_directory = round_directory / "decoded_images"
+    image_directory.mkdir(parents=True, exist_ok=True)
     artifacts: list[LatentImage] = []
-    for display_index, candidate_index in enumerate(selected_indices):
-        candidate = evaluated[candidate_index]
+    for display_index, candidate in enumerate(evaluated):
+        candidate.image.save(
+            image_directory / f"query_{display_index + 1:02d}.png",
+            format="PNG",
+            optimize=True,
+        )
         metadata = {
             "search_version": runtime.config.search.version,
-            "strategy_mode": block.strategy_mode,
-            "strategy_parameters": strategy_parameters,
+            "query_algorithm": "entropy",
             "proposal_backend": proposal.backend,
-            "proposal_feature": proposal.features[candidate_index].tolist(),
+            "proposal_feature": proposal.features[display_index].tolist(),
             "display_index": display_index,
-            "filter_relaxed": relaxed,
             "proposal_role": (
-                proposal.roles[candidate_index] if proposal.roles else None
+                proposal.roles[display_index] if proposal.roles else None
             ),
-            "search_scale": query_scale,
-            "mvlq_query_scale": (
-                query_scale if block.strategy_mode in line_modes else None
-            ),
-            "constrained_mvlq": proposal.metadata,
-            "face_region_preference": participant.preferred_face_region,
-            "age_appearance_preference": participant.preferred_age_appearance,
-            "proposal_attempts": proposal_attempts + 1,
-            "filter_recovery_used": recovery_used,
-            "effective_duplicate_distance": effective_duplicate_distance,
+            "entropy_metrics": proposal.metadata,
         }
-        artifact = persist_candidate(
-            db=db,
-            runtime=runtime,
-            participant=participant,
-            candidate=candidate,
-            stage_type="experiment1",
-            condition_type=f"M={m_value}",
-            seed=seed + candidate_index,
-            block_id=block.block_id,
-            round_id=round_id,
-            batch_id=None,
-            metadata=metadata,
+        artifacts.append(
+            persist_candidate(
+                db=db,
+                runtime=runtime,
+                participant=participant,
+                candidate=candidate,
+                stage_type="experiment1",
+                condition_type=f"M={block.m_value}",
+                seed=seed + display_index,
+                block_id=block.block_id,
+                round_id=round_id,
+                batch_id=None,
+                metadata=metadata,
+            )
         )
-        artifacts.append(artifact)
     db.commit()
     return artifacts
 
@@ -477,7 +308,8 @@ def update_block_after_selection(
     selected_image_id: str,
     round_id: int,
 ) -> None:
-    runtime.ensure_ready()
+    if block.strategy_mode != "entropy":
+        raise ValueError("Only the entropy query algorithm is currently supported.")
     strategy_parameters = json_loads(block.strategy_parameters_json or "{}")
     strategy = runtime.strategy_for(block.strategy_mode, strategy_parameters)
     shown = [db.get(LatentImage, image_id) for image_id in shown_image_ids]
@@ -494,47 +326,8 @@ def update_block_after_selection(
         winner_latent=winner_latent,
         state_path=block.strategy_state_path,
     )
-    if block.strategy_mode == "mvlq":
-        participant = db.get(Participant, block.participant_id)
-        if participant is None:
-            raise ValueError("MVLQ block refers to an unknown participant")
-        center_evaluation = evaluate_candidates(runtime, new_center[None, :])
-        center_is_valid = bool(
-            strict_candidate_indices(
-                runtime,
-                center_evaluation,
-                participant.preferred_target_gender,
-            )
-        )
-        if not center_is_valid:
-            new_center = winner_latent.astype(np.float32)
-            strategy.constrain_map(new_center, block.strategy_state_path)
     np.save(block.mu_path, new_center.astype(np.float32))
-    block.sigma = (
-        max(
-            float(
-                strategy_parameters.get(
-                    "sigma_min",
-                    runtime.config.search.minimum_mutation_scale,
-                )
-            ),
-            float(
-                strategy_parameters.get(
-                    "sigma_init",
-                    runtime.config.search.initial_mutation_scale,
-                )
-            )
-            * float(
-                strategy_parameters.get(
-                    "sigma_decay",
-                    runtime.config.search.mutation_decay,
-                )
-            )
-            ** max(round_id - 1, 0),
-        )
-        if block.strategy_mode == "deepiec_mutation"
-        else new_sigma
-    )
+    block.sigma = new_sigma
     db.commit()
 
 
@@ -1302,118 +1095,4 @@ def _east_asian_accepted(runtime, candidate: EvaluatedCandidate) -> bool:
         candidate.face_region_label == "east_asian"
         and candidate.east_asian_confidence
         >= float(runtime.config.filters.east_asian_confidence_threshold)
-    )
-
-
-def _initial_strategy_scale(strategy_mode: str, parameters: dict) -> float:
-    if strategy_mode in {
-        "deepiec_mutation",
-        "heuristic",
-        "fast_direct",
-        "cmaes",
-    }:
-        return float(parameters.get("sigma_init", 0.5))
-    if strategy_mode in {"axis_pair", "sequential_gallery"}:
-        return float(parameters.get("step_init", 1.0))
-    return 1.0
-
-
-def _propose_block_population(
-    strategy,
-    block: ExperimentBlock,
-    center: np.ndarray,
-    count: int,
-    seed: int,
-    round_id: int,
-    display_count: int,
-    query_scale: float | None = None,
-) -> ProposalBatch:
-    if block.strategy_mode == "deepiec_mutation" and round_id == 1:
-        return strategy.initial_population(count, seed)
-    return strategy.propose(
-        center=center,
-        sigma=block.sigma if query_scale is None else query_scale,
-        count=count,
-        seed=seed,
-        state_path=block.strategy_state_path,
-        round_id=round_id,
-        display_count=display_count,
-    )
-
-
-def _append_filter_recovery_candidates(
-    runtime,
-    proposal: ProposalBatch,
-    evaluated: list[EvaluatedCandidate],
-    center: np.ndarray,
-    seed: int,
-    required: int,
-    target_gender: str | None,
-) -> tuple[ProposalBatch, list[EvaluatedCandidate], list[int]]:
-    recovery_parameters = {
-        "latent_dim": min(8, runtime.config.search.pca_dimensions),
-        "sigma_init": 0.12,
-        "sigma_min": 0.03,
-        "sigma_max": 0.20,
-        "sigma_shrink": 0.70,
-        "sigma_expand": 1.02,
-    }
-    recovery_strategy = runtime.strategy_for(
-        "fast_direct",
-        recovery_parameters,
-    )
-    combined_latents = np.asarray(proposal.latents, dtype=np.float32)
-    combined_roles = list(
-        proposal.roles or ["primary_proposal"] * len(combined_latents)
-    )
-    combined_evaluated = list(evaluated)
-    for attempt in range(2):
-        recovery_count = max(32, required * 6) * (attempt + 1)
-        recovery = recovery_strategy.propose(
-            center=center,
-            sigma=0.12 / (attempt + 1),
-            count=recovery_count,
-            seed=seed + attempt * 49979687,
-            round_id=1,
-            display_count=required,
-        )
-        recovery_evaluated = evaluate_candidates(runtime, recovery.latents)
-        combined_latents = np.vstack(
-            [combined_latents, recovery.latents]
-        ).astype(np.float32)
-        combined_roles.extend(
-            [f"filter_recovery_{attempt + 1}"] * len(recovery.latents)
-        )
-        combined_evaluated.extend(recovery_evaluated)
-        combined_features = runtime.projector.transform(combined_latents)
-        strict_indices = strict_candidate_indices(
-            runtime,
-            combined_evaluated,
-            target_gender,
-        )
-        if len(strict_indices) >= required:
-            return (
-                ProposalBatch(
-                    latents=combined_latents,
-                    features=combined_features,
-                    backend=f"{proposal.backend}+filter_recovery",
-                    roles=combined_roles,
-                ),
-                combined_evaluated,
-                strict_indices,
-            )
-    combined_features = runtime.projector.transform(combined_latents)
-    return (
-        ProposalBatch(
-            latents=combined_latents,
-            features=combined_features,
-            backend=f"{proposal.backend}+filter_recovery",
-            roles=combined_roles,
-        ),
-        combined_evaluated,
-        strict_candidate_indices(
-            runtime,
-            combined_evaluated,
-            target_gender,
-        ),
     )

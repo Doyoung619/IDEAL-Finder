@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
@@ -72,7 +73,7 @@ def test_complete_demo_experiment(tmp_path):
                 f"/experiment1/instructions?block={block_index}"
             )
             assert instruction.status_code == 200
-            assert "Maximum-Variance Line Query" in instruction.text
+            assert "Entropy Query" in instruction.text
             assert 'name="strategy_mode"' not in instruction.text
             start = client.post(
                 "/experiment1/start",
@@ -157,6 +158,9 @@ def test_complete_demo_experiment(tmp_path):
 
     with get_session() as db:
         participant = db.scalar(select(Participant))
+        first_block = db.scalar(
+            select(ExperimentBlock).order_by(ExperimentBlock.sequence_index)
+        )
         assert participant.status == "completed"
         assert db.scalar(select(func.count(ExperimentBlock.block_id))) == 4
         assert db.scalar(select(func.count(Selection.id))) == 4
@@ -165,3 +169,16 @@ def test_complete_demo_experiment(tmp_path):
         assert db.scalar(select(func.count(ProfileChip.id))) == 2
         assert db.scalar(select(func.count(FinalSurvey.id))) == 1
         assert db.scalar(select(func.count(LatentImage.image_id))) >= 18
+        round_directory = (
+            Path(first_block.strategy_state_path).parent / "round_01"
+        )
+        assert (round_directory / "query_points.npy").exists()
+        assert (round_directory / "query_center.npy").exists()
+        assert (round_directory / "posterior_mean.npy").exists()
+        assert (round_directory / "posterior_covariance.npy").exists()
+        assert (round_directory / "map_estimate.npy").exists()
+        assert (round_directory / "entropy_metrics.json").exists()
+        assert (round_directory / "observed_choice.json").exists()
+        assert len(
+            list((round_directory / "decoded_images").glob("*.png"))
+        ) == first_block.m_value

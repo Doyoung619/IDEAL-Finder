@@ -191,27 +191,22 @@ async def start_experiment1(request: Request, db: Session = Depends(get_db)):
         return redirect("/answer-key")
     existing = find_block(db, participant, block_index)
     if existing is None:
-        strategy_parameters = {}
-        if (
-            request.app.state.config.query.strategy
-            == "demographic_constrained_mvlq"
-        ):
-            strategy_parameters = {
-                "condition_gender": (
-                    participant.preferred_target_gender
-                    if participant.preferred_target_gender in {"female", "male"}
-                    else request.app.state.config.demographic.gender
-                ),
-                "condition_races": list(
-                    request.app.state.config.demographic.race_targets
-                ),
-            }
+        strategy_parameters = {
+            "condition_gender": (
+                participant.preferred_target_gender
+                if participant.preferred_target_gender in {"female", "male"}
+                else request.app.state.config.demographic.gender
+            ),
+            "condition_races": list(
+                request.app.state.config.demographic.race_targets
+            ),
+        }
         get_or_create_block(
             db,
             request.app.state.runtime,
             participant,
             block_index,
-            strategy_mode=request.app.state.config.query.strategy,
+            strategy_mode="entropy",
             strategy_parameters=strategy_parameters,
         )
     exit_screen(

@@ -36,26 +36,11 @@ experiment:
   recommendation_set_size: 16
   candidate_pool_size: 64
   candidate_pool_multiplier: 4
-  direct_candidate_pool_minimum: 16
-  direct_candidate_pool_multiplier: 3
 
 search:
-  version: "mvlq_v1_east_asian_only"
-  mode: "mvlq"
+  version: "entropy_v1_east_asian_only"
   pca_dimensions: 32
   pca_fit_samples: 512
-  mutation_probability: 0.50
-  random_immigration_probability: 0.10
-  initial_mutation_scale: 0.50
-  mutation_decay: 0.95
-  minimum_mutation_scale: 0.10
-  duplicate_distance: 0.15
-  alpha: 0.35
-  sigma0: 0.30
-  decay: 0.95
-  min_sigma: 0.08
-  exploration_fraction: 0.25
-  exploration_scale: 2.5
 
 filters:
   minimum_quality: 0.18
@@ -100,17 +85,14 @@ conditional_prior:
   seed: 42
 
 query:
-  strategy: "mvlq"
+  algorithm: "entropy"
   num_options: 5
-  radius_mode: "initial_max_std"
-  backtrack_factor: 0.8
-  min_alpha: 0.1
-  max_backtracking_steps: 15
-  center_candidates: 16
-
-preference:
-  beta: 1.0
-  distance_space: "theta"
+  posterior_mc_samples: 512
+  num_restarts: 8
+  optimization_steps: 200
+  learning_rate: 0.05
+  constraint: "prior_ellipsoid"
+  seed: 0
 
 demo:
   m_list: [2, 4, 8, 16]
@@ -120,3 +102,7 @@ demo:
   recommendation_set_size: 4
   candidate_pool_size: 32
   candidate_pool_multiplier: 4
+  query:
+    posterior_mc_samples: 64
+    num_restarts: 2
+    optimization_steps: 30

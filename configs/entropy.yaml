@@ -8,14 +8,13 @@ generator:
 
 demographic:
   classifier: "fairface"
-  weights: "${FAIRFACE_WEIGHTS}"
   gender: "female"
   race_targets: ["east_asian"]
   gender_threshold: 0.90
   race_threshold: 0.80
 
 conditional_prior:
-  artifact_path: "artifacts/priors/female_east_asian_d12.npz"
+  artifact_path: "artifacts/priors/{gender}_east_asian_d12.npz"
   latent_space: "w"
   dimension: 12
   selection_mode: "hard"
@@ -26,14 +25,11 @@ conditional_prior:
   seed: 42
 
 query:
-  strategy: "demographic_constrained_mvlq"
+  algorithm: "entropy"
   num_options: 5
-  radius_mode: "initial_max_std"
-  backtrack_factor: 0.8
-  min_alpha: 0.1
-  max_backtracking_steps: 15
-  center_candidates: 16
-
-preference:
-  beta: 1.0
-  distance_space: "theta"
+  posterior_mc_samples: 512
+  num_restarts: 8
+  optimization_steps: 200
+  learning_rate: 0.05
+  constraint: "prior_ellipsoid"
+  seed: 0

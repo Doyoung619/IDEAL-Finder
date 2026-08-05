@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
+import torch
 
 from core.conditional_prior import ConditionalPCAPrior
 
@@ -107,6 +108,51 @@ class GaussianPreferencePosterior:
         probabilities = np.exp(logits)
         return probabilities / float(probabilities.sum())
 
+    def sample(
+        self,
+        num_samples: int,
+        seed: int = 0,
+        device: str | torch.device = "cpu",
+        dtype: torch.dtype = torch.float32,
+    ) -> torch.Tensor:
+        """Draw reparameterized samples from the current Gaussian approximation."""
+        if num_samples < 1:
+            raise ValueError("num_samples must be positive")
+        target_device = torch.device(device)
+        mean = torch.as_tensor(self.map_estimate, dtype=dtype, device=target_device)
+        covariance = torch.as_tensor(
+            0.5 * (self.covariance + self.covariance.T),
+            dtype=dtype,
+            device=target_device,
+        )
+        identity = torch.eye(len(mean), dtype=dtype, device=target_device)
+        stable_covariance = None
+        for jitter in (1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3):
+            candidate = covariance + jitter * identity
+            _, info = torch.linalg.cholesky_ex(candidate)
+            if int(info.max().item()) == 0:
+                stable_covariance = candidate
+                break
+        if stable_covariance is None:
+            eigenvalues, eigenvectors = torch.linalg.eigh(covariance)
+            stable_covariance = (
+                eigenvectors
+                @ torch.diag(eigenvalues.clamp_min(1e-8))
+                @ eigenvectors.T
+                + 1e-6 * identity
+            )
+        distribution = torch.distributions.MultivariateNormal(
+            mean, covariance_matrix=stable_covariance
+        )
+        devices = []
+        if target_device.type == "cuda":
+            devices = [target_device.index or torch.cuda.current_device()]
+        with torch.random.fork_rng(devices=devices):
+            torch.manual_seed(int(seed))
+            if target_device.type == "cuda":
+                torch.cuda.manual_seed_all(int(seed))
+            return distribution.rsample((num_samples,))
+
     def update(
         self, queries: np.ndarray, winner_index: int
     ) -> "GaussianPreferencePosterior":
@@ -139,7 +185,7 @@ class GaussianPreferencePosterior:
         metric: np.ndarray | None = None,
         jitter: float = 1e-6,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Fit a Laplace posterior while preserving the legacy MVLQ behavior."""
+        """Fit a Laplace posterior for the shared distance-softmax likelihood."""
         prior_mean = np.asarray(prior_mean, dtype=np.float64)
         prior_covariance = np.asarray(prior_covariance, dtype=np.float64)
         estimate = np.asarray(initial, dtype=np.float64).copy()

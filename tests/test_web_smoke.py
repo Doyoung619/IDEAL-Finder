@@ -52,7 +52,7 @@ def test_demo_flow_reaches_first_generated_round(tmp_path):
 
         instruction = client.get(response.headers["location"])
         assert instruction.status_code == 200
-        assert "Maximum-Variance Line Query" in instruction.text
+        assert "Entropy Query" in instruction.text
         assert 'name="strategy_mode"' not in instruction.text
         block_index = 0
         start = client.post(
@@ -78,8 +78,8 @@ def test_demo_flow_reaches_first_generated_round(tmp_path):
             )
         )
         assert len(images) == block.m_value
-        assert block.strategy_mode == "mvlq"
+        assert block.strategy_mode == "entropy"
         assert participant.preferred_face_region == "east_asian_only"
         assert participant.preferred_age_appearance == "twenties_boost"
-        assert block.strategy_parameters_json == "{}"
+        assert '"condition_gender":"male"' in block.strategy_parameters_json
         assert all(image.latent_path.endswith(".npy") for image in images)

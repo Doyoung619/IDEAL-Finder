@@ -54,7 +54,7 @@ def main() -> None:
                 if artifact.stage_type == "experiment1"
             )
             has_incompatible_block = any(
-                block.strategy_mode != config.search.mode for block in blocks
+                block.strategy_mode != config.query.algorithm for block in blocks
             )
             has_incompatible_region_preference = (
                 participant.preferred_face_region != "east_asian_only"
