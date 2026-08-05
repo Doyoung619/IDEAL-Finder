@@ -634,6 +634,7 @@ def generate_filtered_prior_candidates(
             target_face_region,
             target_age_appearance,
             count,
+            seed,
         )
         if cached is not None:
             return cached
@@ -719,6 +720,7 @@ def _load_precomputed_candidates(
     target_face_region: str | None,
     target_age_appearance: str | None,
     count: int,
+    seed: int,
 ) -> list[EvaluatedCandidate] | None:
     path = _precomputed_candidate_path(
         runtime,
@@ -734,14 +736,20 @@ def _load_precomputed_candidates(
             records = json.loads(str(cache["records_json"].item()))
         if len(latents) < count or len(records) != len(latents):
             return None
-        images = runtime.generator.decode(latents[:count])
+        # A startup cache is a reusable bank, not a fixed answer key. Shuffle
+        # its deterministic order per round so fallback candidates do not
+        # repeatedly decode the same first few faces.
+        selected_indices = np.random.default_rng(seed).permutation(len(latents))[:count]
+        selected_latents = latents[selected_indices]
+        selected_records = [records[int(index)] for index in selected_indices]
+        images = runtime.generator.decode(selected_latents)
         return [
             EvaluatedCandidate(
                 latent=latent,
                 image=image,
                 **record,
             )
-            for latent, image, record in zip(latents[:count], images, records[:count])
+            for latent, image, record in zip(selected_latents, images, selected_records)
         ]
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
