@@ -76,6 +76,56 @@ button, input, textarea { font: inherit; }
   font-size: 12px;
 }
 
+.loading-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(22, 25, 32, 0.24);
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+
+.loading-screen.is-visible { opacity: 1; }
+
+.loading-card {
+  width: min(280px, 100%);
+  padding: 18px 18px 20px;
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  color: var(--ink);
+  background: #fffaf5;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 24px;
+  box-shadow: 0 22px 60px rgba(27, 31, 38, 0.22);
+  transform: translateY(8px) scale(0.97);
+  transition: transform 180ms ease;
+}
+
+.loading-screen.is-visible .loading-card {
+  transform: translateY(0) scale(1);
+}
+
+.loading-kitty {
+  width: 150px;
+  height: 150px;
+  object-fit: cover;
+  border-radius: 18px;
+  animation: loading-bob 1.8s ease-in-out infinite;
+}
+
+.loading-card strong { font-size: 17px; }
+.loading-card > span { color: var(--muted); font-size: 13px; }
+.loading-dots { display: inline-block; width: 18px; overflow: hidden; vertical-align: bottom; }
+
+@keyframes loading-bob {
+  0%, 100% { transform: translateY(0) rotate(-1deg); }
+  50% { transform: translateY(-5px) rotate(1deg); }
+}
+
 .hero-card,
 .content-card {
   background: var(--surface);

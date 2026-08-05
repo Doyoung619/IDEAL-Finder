@@ -258,13 +258,63 @@ def _generate_entropy_round(
             "Entropy Query returned an unexpected number of synthetic queries"
         )
     evaluated = evaluate_candidates(runtime, proposal.latents)
+    strict_indices = strict_candidate_indices(
+        runtime,
+        evaluated,
+        participant.preferred_target_gender,
+        participant.preferred_age_appearance,
+    )
+    display_indices = strict_indices[: block.m_value]
+    display_candidates = [evaluated[index] for index in display_indices]
+    display_features = proposal.features[display_indices]
+    display_roles = [
+        proposal.roles[index] if proposal.roles else f"entropy_query_{index + 1}"
+        for index in display_indices
+    ]
+    missing = block.m_value - len(display_candidates)
+    if missing:
+        fallback_candidates = generate_filtered_prior_candidates(
+            runtime,
+            participant.preferred_target_gender,
+            participant.preferred_face_region,
+            participant.preferred_age_appearance,
+            count=max(missing * 4, 8),
+            seed=seed + 7919,
+        )
+        fallback_latents = np.vstack(
+            [candidate.latent for candidate in fallback_candidates]
+        )
+        diverse_indices = farthest_point_sampling(
+            fallback_latents,
+            count=missing,
+            seed=seed + 15485863,
+        )
+        display_candidates.extend(
+            fallback_candidates[index] for index in diverse_indices
+        )
+        display_features = np.vstack(
+            [
+                display_features,
+                np.zeros(
+                    (missing, proposal.features.shape[1]),
+                    dtype=np.float32,
+                ),
+            ]
+        )
+        display_roles.extend(
+            f"filtered_{index + 1}" for index in range(missing)
+        )
+    if len(display_candidates) != block.m_value:
+        raise RuntimeError(
+            "Could not produce the requested number of hard-filtered faces."
+        )
     round_directory = (
         Path(block.strategy_state_path).parent / f"round_{round_id:02d}"
     )
     image_directory = round_directory / "decoded_images"
     image_directory.mkdir(parents=True, exist_ok=True)
     artifacts: list[LatentImage] = []
-    for display_index, candidate in enumerate(evaluated):
+    for display_index, candidate in enumerate(display_candidates):
         candidate.image.save(
             image_directory / f"query_{display_index + 1:02d}.png",
             format="PNG",
@@ -274,11 +324,9 @@ def _generate_entropy_round(
             "search_version": runtime.config.search.version,
             "query_algorithm": "entropy",
             "proposal_backend": proposal.backend,
-            "proposal_feature": proposal.features[display_index].tolist(),
+            "proposal_feature": display_features[display_index].tolist(),
             "display_index": display_index,
-            "proposal_role": (
-                proposal.roles[display_index] if proposal.roles else None
-            ),
+            "proposal_role": display_roles[display_index],
             "entropy_metrics": proposal.metadata,
         }
         artifacts.append(
@@ -413,6 +461,7 @@ def get_or_generate_recommendation_set(
         evaluated,
         participant.preferred_target_gender,
         required=set_size,
+        target_age_appearance=participant.preferred_age_appearance,
     )
 
     prompt = ""
@@ -598,6 +647,7 @@ def generate_filtered_prior_candidates(
             if candidate.quality_accepted
             and candidate.face_detected
             and _east_asian_accepted(runtime, candidate)
+            and _matches_age_preference(candidate, target_age_appearance)
             and _adult_accepted(runtime, candidate)
             and _portrait_accepted(runtime, candidate)
             and runtime.gender_controller.accepts(
@@ -732,6 +782,7 @@ def accepted_candidate_indices(
     evaluated: list[EvaluatedCandidate],
     target_gender: str | None,
     required: int,
+    target_age_appearance: str | None,
 ) -> tuple[list[int], bool]:
     strict = [
         index
@@ -739,6 +790,7 @@ def accepted_candidate_indices(
         if candidate.quality_accepted
         and candidate.face_detected
         and _east_asian_accepted(runtime, candidate)
+        and _matches_age_preference(candidate, target_age_appearance)
         and _adult_accepted(runtime, candidate)
         and _portrait_accepted(runtime, candidate)
         and runtime.gender_controller.accepts(
@@ -758,6 +810,7 @@ def strict_candidate_indices(
     runtime,
     evaluated: list[EvaluatedCandidate],
     target_gender: str | None,
+    target_age_appearance: str | None,
 ) -> list[int]:
     return [
         index
@@ -765,6 +818,7 @@ def strict_candidate_indices(
         if candidate.quality_accepted
         and candidate.face_detected
         and _east_asian_accepted(runtime, candidate)
+        and _matches_age_preference(candidate, target_age_appearance)
         and _adult_accepted(runtime, candidate)
         and _portrait_accepted(runtime, candidate)
         and runtime.gender_controller.accepts(

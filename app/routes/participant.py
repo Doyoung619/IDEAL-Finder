@@ -111,9 +111,6 @@ async def submit_basic_info(request: Request, db: Session = Depends(get_db)):
         "age_band",
         "gender",
         "preferred_target_gender",
-        "preferred_age_appearance",
-        "dating_experience",
-        "image_selection_importance",
     ]
     if any(not form.get(field) for field in required) or form.get("honest") != "yes":
         return request.app.state.templates.TemplateResponse(
@@ -130,9 +127,9 @@ async def submit_basic_info(request: Request, db: Session = Depends(get_db)):
     participant.gender = str(form["gender"])
     participant.preferred_target_gender = str(form["preferred_target_gender"])
     participant.preferred_face_region = "east_asian_only"
-    participant.preferred_age_appearance = str(form["preferred_age_appearance"])
-    participant.dating_experience = str(form["dating_experience"])
-    participant.image_selection_importance = int(form["image_selection_importance"])
+    participant.preferred_age_appearance = "twenties_boost"
+    participant.dating_experience = None
+    participant.image_selection_importance = None
     participant.honest_participation = True
     participant.status = "basic_info_complete"
     db.commit()

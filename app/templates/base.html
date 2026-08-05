@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
-  <script defer src="{{ url_for('static', path='app.js') }}"></script>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=3">
+  <script defer src="{{ url_for('static', path='app.js') }}?v=3"></script>
 </head>
 <body>
   <header class="site-header">
@@ -26,6 +26,17 @@
   <footer class="site-footer">
     연구용 프로토타입 · 모든 자극 이미지는 저장된 잠재벡터에서 생성됩니다.
   </footer>
+  <div class="loading-screen" data-loading-screen hidden aria-live="polite">
+    <div class="loading-card" role="status">
+      <img
+        class="loading-kitty"
+        src="{{ url_for('static', path='loading-kitty.png') }}"
+        alt="귀여운 고양이가 얼굴을 준비하는 모습"
+      >
+      <strong>잠시만요!</strong>
+      <span>귀여운 얼굴을 준비하고 있어요<span class="loading-dots">...</span></span>
+    </div>
+  </div>
   {% block scripts %}{% endblock %}
 </body>
 </html>

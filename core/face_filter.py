@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
+from pathlib import Path
+import shutil
 
 import numpy as np
 from PIL import Image, ImageFilter
@@ -21,13 +24,30 @@ class FaceQualityFilter:
         try:
             import cv2
 
-            detector_path = (
-                cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+            detector_path = Path(cv2.data.haarcascades) / (
+                "haarcascade_frontalface_default.xml"
             )
-            detector = cv2.CascadeClassifier(detector_path)
-            if not detector.empty():
-                self.face_detector = detector
-        except (ImportError, AttributeError):
+            detector_paths = [detector_path]
+            # OpenCV's Windows file loader can fail for cascade files below a
+            # path containing non-ASCII characters (for example, a Korean
+            # Windows username). Retry through an ASCII Windows temp path.
+            if os.name == "nt" and any(ord(char) > 127 for char in str(detector_path)):
+                temp_root = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Temp"
+                fallback_path = temp_root / "ideal_finder_cv2" / detector_path.name
+                fallback_path.parent.mkdir(parents=True, exist_ok=True)
+                if (
+                    not fallback_path.exists()
+                    or fallback_path.stat().st_size != detector_path.stat().st_size
+                ):
+                    shutil.copyfile(detector_path, fallback_path)
+                detector_paths = [fallback_path]
+
+            for candidate_path in detector_paths:
+                detector = cv2.CascadeClassifier(str(candidate_path))
+                if not detector.empty():
+                    self.face_detector = detector
+                    break
+        except (ImportError, AttributeError, OSError):
             self.face_detector = None
 
     def evaluate(

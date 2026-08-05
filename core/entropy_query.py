@@ -15,6 +15,7 @@ class EntropyQueryConfig:
     num_restarts: int = 8
     optimization_steps: int = 200
     learning_rate: float = 0.05
+    exploration_radius: float = 1.0
     seed: int = 0
     device: str = "cpu"
 
@@ -25,6 +26,8 @@ class EntropyQueryConfig:
             raise ValueError("restart and optimization step counts must be positive")
         if self.learning_rate <= 0:
             raise ValueError("learning_rate must be positive")
+        if self.exploration_radius <= 0:
+            raise ValueError("exploration_radius must be positive")
 
 
 @dataclass
@@ -40,6 +43,7 @@ class EntropyQueryResult:
     restart: int
     optimization_steps: int
     initial_mutual_information: float
+    exploration_radius: float
 
     def metadata(self) -> dict[str, Any]:
         """Return JSON-serializable optimization metrics."""
@@ -53,6 +57,7 @@ class EntropyQueryResult:
             "selected_restart": self.restart,
             "optimization_steps": self.optimization_steps,
             "initial_mutual_information": self.initial_mutual_information,
+            "exploration_radius": self.exploration_radius,
         }
 
 
@@ -139,23 +144,32 @@ class EntropyQuerySelector:
 
         random = torch.Generator(device=self.device)
         random.manual_seed(current_seed + 104729)
+        exploration_radius = float(self.config.exploration_radius)
         best: dict[str, Any] | None = None
         failures: list[str] = []
         for restart in range(self.config.num_restarts):
-            raw_u = torch.nn.Parameter(
-                0.1
-                * torch.randn(
-                    (num_options, dimension),
-                    generator=random,
-                    dtype=dtype,
-                    device=self.device,
-                )
+            directions = torch.randn(
+                (num_options, dimension),
+                generator=random,
+                dtype=dtype,
+                device=self.device,
             )
+            directions = directions / directions.norm(dim=-1, keepdim=True).clamp_min(
+                1e-8
+            )
+            radii = torch.empty(
+                (num_options, 1), dtype=dtype, device=self.device
+            ).uniform_(
+                0.65 * exploration_radius,
+                exploration_radius,
+                generator=random,
+            )
+            raw_u = torch.nn.Parameter(directions * radii)
             optimizer = torch.optim.Adam(
                 [raw_u], lr=self.config.learning_rate
             )
             with torch.no_grad():
-                self._project_unit_ball(raw_u)
+                self._project_ball(raw_u, exploration_radius)
                 initial_queries = center[None, :] + raw_u @ prior_factor.T
                 initial_score, _, _ = mutual_information(samples, initial_queries)
             if not torch.isfinite(initial_score):
@@ -185,7 +199,7 @@ class EntropyQuerySelector:
                     break
                 optimizer.step()
                 with torch.no_grad():
-                    self._project_unit_ball(raw_u)
+                    self._project_ball(raw_u, exploration_radius)
                     candidate = self._snapshot(
                         raw_u,
                         samples,
@@ -219,12 +233,13 @@ class EntropyQuerySelector:
             restart=best["restart"],
             optimization_steps=self.config.optimization_steps,
             initial_mutual_information=best["initial_mutual_information"],
+            exploration_radius=exploration_radius,
         )
 
     @staticmethod
-    def _project_unit_ball(values: torch.Tensor) -> None:
+    def _project_ball(values: torch.Tensor, radius: float) -> None:
         norms = values.norm(dim=-1, keepdim=True)
-        values.div_(torch.clamp(norms, min=1.0))
+        values.mul_(torch.clamp(radius / norms.clamp_min(1e-8), max=1.0))
 
     @staticmethod
     def _value(posterior, name: str):

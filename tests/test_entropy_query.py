@@ -59,6 +59,28 @@ def test_shape_finite_and_prior_ellipsoid_constraint():
     assert result.max_mahalanobis_radius <= 1.0 + 1e-5
 
 
+def test_exploration_radius_expands_query_ellipsoid():
+    prior = make_prior()
+    posterior = GaussianPreferencePosterior.initialize_from_prior(prior)
+    selector = EntropyQuerySelector(
+        EntropyQueryConfig(
+            posterior_mc_samples=64,
+            num_restarts=2,
+            optimization_steps=20,
+            exploration_radius=1.5,
+            device="cpu",
+        )
+    )
+    result = selector.select(posterior, prior.theta_covariance, num_options=4)
+    delta = result.query_points - posterior.map_estimate[None, :]
+    inverse = np.linalg.inv(prior.theta_covariance)
+    radii = np.einsum("ni,ij,nj->n", delta, inverse, delta)
+
+    assert result.exploration_radius == 1.5
+    assert np.all(radii <= 2.25 + 1e-5)
+    assert result.max_mahalanobis_radius <= 1.5 + 1e-5
+
+
 def test_duplicate_queries_have_zero_information_and_score_is_nonnegative():
     samples = torch.randn(128, 3)
     duplicates = torch.zeros(5, 3)

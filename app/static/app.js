@@ -1,6 +1,13 @@
 document.addEventListener("DOMContentLoaded", () => {
   const startedAt = performance.now();
   const reactionInput = document.querySelector("[data-reaction-input]");
+  const loadingScreen = document.querySelector("[data-loading-screen]");
+
+  const showLoading = () => {
+    if (!loadingScreen) return;
+    loadingScreen.hidden = false;
+    requestAnimationFrame(() => loadingScreen.classList.add("is-visible"));
+  };
 
   document.querySelectorAll("[data-selection-form]").forEach((form) => {
     const cards = [...form.querySelectorAll(".selectable-card")];
@@ -33,6 +40,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (reactionInput) {
         reactionInput.value = ((performance.now() - startedAt) / 1000).toFixed(3);
       }
+      showLoading();
     });
     refreshSubmit();
   });
@@ -59,6 +67,7 @@ document.addEventListener("DOMContentLoaded", () => {
         button.dataset.originalText = button.textContent;
         button.textContent = "저장 중…";
       });
+      showLoading();
     });
   });
 

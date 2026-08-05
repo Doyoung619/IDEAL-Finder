@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import warnings
 
 import numpy as np
 
@@ -115,6 +116,45 @@ class ExperimentRuntime:
                         dimension, 1.0 / dimension
                     ),
                     accepted_samples=1,
+                    seed=int(self.config.query.seed),
+                )
+            elif not Path(prior_path).exists():
+                if not self.projector.is_fitted:
+                    self.ensure_ready()
+                model = self.projector.model
+                if model is None:
+                    raise RuntimeError("Latent PCA projector is not fitted")
+                dimension = min(
+                    int(self.config.conditional_prior.dimension),
+                    int(model.components_.shape[0]),
+                )
+                warnings.warn(
+                    "Conditional prior artifact was not found at "
+                    f"{prior_path}; using the fitted generic latent PCA prior "
+                    "until a demographic prior is generated.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                prior = ConditionalPCAPrior(
+                    condition=DemographicCondition(
+                        condition_gender, condition_races
+                    ),
+                    mu_w=np.asarray(model.mean_, dtype=np.float64),
+                    components=np.asarray(
+                        model.components_[:dimension], dtype=np.float64
+                    ),
+                    eigenvalues=np.asarray(
+                        model.explained_variance_[:dimension], dtype=np.float64
+                    ),
+                    explained_variance_ratio=np.asarray(
+                        model.explained_variance_ratio_[:dimension],
+                        dtype=np.float64,
+                    ),
+                    accepted_samples=int(getattr(model, "n_samples_", 0)),
+                    generator_metadata={
+                        "fallback": "generic_latent_pca",
+                        "requested_prior": prior_path,
+                    },
                     seed=int(self.config.query.seed),
                 )
             else:
