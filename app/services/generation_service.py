@@ -261,7 +261,9 @@ def _generate_entropy_round(
     accepted_indices = [
         index
         for index, candidate in enumerate(evaluated)
-        if runtime.gender_controller.accepts(
+        if candidate.quality_accepted
+        and candidate.face_detected
+        and runtime.gender_controller.accepts(
             _gender_estimate(candidate), participant.preferred_target_gender
         )
     ]
@@ -366,12 +368,22 @@ def _evaluate_gender_only(runtime, latents: np.ndarray) -> list[EvaluatedCandida
     )
     candidates = []
     for latent, image, estimate in zip(latents, images, estimates):
+        quality = runtime.quality_filter.evaluate(
+            image,
+            require_face_detection=not runtime.generator.generator_name.startswith(
+                "demo"
+            ),
+        )
         candidates.append(
             replace(
                 _unfiltered_candidate(latent, image),
                 gender_label=estimate.label,
                 gender_confidence=estimate.confidence,
                 gender_backend=estimate.backend,
+                quality_score=quality.score,
+                quality_accepted=quality.accepted,
+                face_detected=quality.face_detected,
+                quality_backend=quality.backend,
             )
         )
     return candidates
@@ -394,7 +406,9 @@ def _generate_gender_only_candidates(
         accepted.extend(
             candidate
             for candidate in _evaluate_gender_only(runtime, pool)
-            if runtime.gender_controller.accepts(
+            if candidate.quality_accepted
+            and candidate.face_detected
+            and runtime.gender_controller.accepts(
                 _gender_estimate(candidate), target_gender
             )
         )
