@@ -410,8 +410,19 @@ def update_block_after_selection(
         raise ValueError("Only the entropy query algorithm is currently supported.")
     strategy_parameters = json_loads(block.strategy_parameters_json or "{}")
     if strategy_parameters.get("prior_mode") == "standard_normal":
-        # Random-prior rounds do not maintain an optimization state; the
-        # selection is still persisted by the route for later analysis.
+        # Random-prior rounds do not maintain an optimization state, but keep
+        # the observed choice artifact for the same downstream analysis shape.
+        round_directory = (
+            Path(block.strategy_state_path).parent / f"round_{round_id:02d}"
+        )
+        round_directory.mkdir(parents=True, exist_ok=True)
+        save_json(
+            round_directory / "observed_choice.json",
+            {
+                "round": round_id,
+                "observed_choice": shown_image_ids.index(selected_image_id),
+            },
+        )
         return
     strategy = runtime.strategy_for(block.strategy_mode, strategy_parameters)
     shown = [db.get(LatentImage, image_id) for image_id in shown_image_ids]
