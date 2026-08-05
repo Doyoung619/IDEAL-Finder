@@ -235,8 +235,7 @@ def _generate_entropy_round(
 ) -> list[LatentImage]:
     """Optimize, decode, persist, and return one direct synthetic query set."""
     strategy_parameters = json_loads(block.strategy_parameters_json or "{}")
-    strategy = runtime.strategy_for("entropy", strategy_parameters)
-    center = np.load(block.mu_path)
+    prior = runtime.conditional_prior(strategy_parameters)
     seed = (
         block.initial_seed
         if round_id == 1
@@ -244,53 +243,19 @@ def _generate_entropy_round(
             f"{block.block_id}:round:{round_id}", participant.base_seed
         )
     )
-    proposal = strategy.propose(
-        center=center,
-        sigma=1.0,
-        count=block.m_value,
-        seed=seed,
-        state_path=block.strategy_state_path,
-        round_id=round_id,
-        display_count=block.m_value,
+    random = np.random.default_rng(seed)
+    display_features = prior.sample_theta(block.m_value, generator=random)
+    display_latents = np.asarray(
+        prior.theta_to_w(display_features), dtype=np.float32
     )
-    if len(proposal.latents) != block.m_value:
-        raise RuntimeError(
-            "Entropy Query returned an unexpected number of synthetic queries"
-        )
-    evaluated = _evaluate_gender_only(runtime, proposal.latents)
-    accepted_indices = [
-        index
-        for index, candidate in enumerate(evaluated)
-        if candidate.quality_accepted
-        and candidate.face_detected
-        and runtime.gender_controller.accepts(
-            _gender_estimate(candidate), participant.preferred_target_gender
-        )
+    images = runtime.generator.decode(display_latents)
+    display_candidates = [
+        _unfiltered_candidate(latent, image)
+        for latent, image in zip(display_latents, images)
     ]
-    display_candidates = [evaluated[index] for index in accepted_indices]
-    display_features = proposal.features[accepted_indices]
     display_roles = [
-        proposal.roles[index] if proposal.roles else f"entropy_query_{index + 1}"
-        for index in accepted_indices
+        f"random_prior_{index + 1}" for index in range(block.m_value)
     ]
-    missing = block.m_value - len(display_candidates)
-    if missing:
-        fallback_candidates = _generate_gender_only_candidates(
-            runtime,
-            participant.preferred_target_gender,
-            missing,
-            seed + 7919,
-        )
-        display_candidates.extend(fallback_candidates)
-        display_features = np.vstack(
-            [
-                display_features,
-                np.zeros((missing, proposal.features.shape[1]), dtype=np.float32),
-            ]
-        )
-        display_roles.extend(f"gender_fallback_{index + 1}" for index in range(missing))
-    if len(display_candidates) != block.m_value:
-        raise RuntimeError("Could not produce enough gender-matched entropy queries.")
     round_directory = (
         Path(block.strategy_state_path).parent / f"round_{round_id:02d}"
     )
@@ -306,11 +271,14 @@ def _generate_entropy_round(
         metadata = {
             "search_version": runtime.config.search.version,
             "query_algorithm": "entropy",
-            "proposal_backend": proposal.backend,
+            "proposal_backend": "random_standard_normal_prior",
             "proposal_feature": display_features[display_index].tolist(),
             "display_index": display_index,
             "proposal_role": display_roles[display_index],
-            "entropy_metrics": proposal.metadata,
+            "entropy_metrics": {
+                "sampling": "independent_standard_normal_prior",
+                "posterior_update": "recorded_but_not_used_for_sampling",
+            },
         }
         artifacts.append(
             persist_candidate(
@@ -428,6 +396,10 @@ def update_block_after_selection(
     if block.strategy_mode != "entropy":
         raise ValueError("Only the entropy query algorithm is currently supported.")
     strategy_parameters = json_loads(block.strategy_parameters_json or "{}")
+    if strategy_parameters.get("prior_mode") == "standard_normal":
+        # Random-prior rounds do not maintain an optimization state; the
+        # selection is still persisted by the route for later analysis.
+        return
     strategy = runtime.strategy_for(block.strategy_mode, strategy_parameters)
     shown = [db.get(LatentImage, image_id) for image_id in shown_image_ids]
     selected = db.get(LatentImage, selected_image_id)
