@@ -261,6 +261,8 @@ def _generate_entropy_round(
     )
     image_directory = round_directory / "decoded_images"
     image_directory.mkdir(parents=True, exist_ok=True)
+    np.save(round_directory / "query_points.npy", display_features)
+    np.save(round_directory / "query_center.npy", prior.theta_mean)
     artifacts: list[LatentImage] = []
     for display_index, candidate in enumerate(display_candidates):
         candidate.image.save(
