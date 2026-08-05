@@ -22,7 +22,7 @@ from app.services.participant_service import m_order
 from app.services.profile_service import build_profile_prompt
 from core.latent_sampler import farthest_point_sampling
 from core.preference_model import PairwisePreferenceModel
-from core.utils import latent_fingerprint
+from core.utils import latent_fingerprint, save_json
 from experiments.design import stable_seed
 from experiments.logging_utils import json_dumps, json_loads
 
