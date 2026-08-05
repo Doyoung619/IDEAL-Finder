@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -257,16 +257,38 @@ def _generate_entropy_round(
         raise RuntimeError(
             "Entropy Query returned an unexpected number of synthetic queries"
         )
-    images = runtime.generator.decode(proposal.latents)
-    display_candidates = [
-        _unfiltered_candidate(latent, image)
-        for latent, image in zip(proposal.latents, images)
+    evaluated = _evaluate_gender_only(runtime, proposal.latents)
+    accepted_indices = [
+        index
+        for index, candidate in enumerate(evaluated)
+        if runtime.gender_controller.accepts(
+            _gender_estimate(candidate), participant.preferred_target_gender
+        )
     ]
-    display_features = proposal.features
+    display_candidates = [evaluated[index] for index in accepted_indices]
+    display_features = proposal.features[accepted_indices]
     display_roles = [
         proposal.roles[index] if proposal.roles else f"entropy_query_{index + 1}"
-        for index in range(block.m_value)
+        for index in accepted_indices
     ]
+    missing = block.m_value - len(display_candidates)
+    if missing:
+        fallback_candidates = _generate_gender_only_candidates(
+            runtime,
+            participant.preferred_target_gender,
+            missing,
+            seed + 7919,
+        )
+        display_candidates.extend(fallback_candidates)
+        display_features = np.vstack(
+            [
+                display_features,
+                np.zeros((missing, proposal.features.shape[1]), dtype=np.float32),
+            ]
+        )
+        display_roles.extend(f"gender_fallback_{index + 1}" for index in range(missing))
+    if len(display_candidates) != block.m_value:
+        raise RuntimeError("Could not produce enough gender-matched entropy queries.")
     round_directory = (
         Path(block.strategy_state_path).parent / f"round_{round_id:02d}"
     )
@@ -333,6 +355,52 @@ def _unfiltered_candidate(latent: np.ndarray, image: Image.Image) -> EvaluatedCa
         face_detected=True,
         quality_backend="entropy_unfiltered",
     )
+
+
+def _evaluate_gender_only(runtime, latents: np.ndarray) -> list[EvaluatedCandidate]:
+    images = runtime.generator.decode(latents)
+    estimates = runtime.gender_controller.estimate(
+        images,
+        latents=latents,
+        generator_name=runtime.generator.generator_name,
+    )
+    candidates = []
+    for latent, image, estimate in zip(latents, images, estimates):
+        candidates.append(
+            replace(
+                _unfiltered_candidate(latent, image),
+                gender_label=estimate.label,
+                gender_confidence=estimate.confidence,
+                gender_backend=estimate.backend,
+            )
+        )
+    return candidates
+
+
+def _generate_gender_only_candidates(
+    runtime,
+    target_gender: str | None,
+    count: int,
+    seed: int,
+) -> list[EvaluatedCandidate]:
+    if target_gender in {None, "", "any"}:
+        latents = runtime.generator.sample_prior(count, seed)
+        return _evaluate_gender_only(runtime, latents)
+    accepted: list[EvaluatedCandidate] = []
+    for attempt in range(int(runtime.config.filters.max_filter_attempts)):
+        pool = runtime.generator.sample_prior(
+            max(count * 8, 16), seed + attempt * 15485863
+        )
+        accepted.extend(
+            candidate
+            for candidate in _evaluate_gender_only(runtime, pool)
+            if runtime.gender_controller.accepts(
+                _gender_estimate(candidate), target_gender
+            )
+        )
+        if len(accepted) >= count:
+            return accepted[:count]
+    raise RuntimeError("Could not produce enough gender-matched entropy queries.")
 
 
 def update_block_after_selection(
