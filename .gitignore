@@ -8,6 +8,7 @@ venv/
 data/*.sqlite3
 data/*.sqlite3-*
 data/models/
+data/precomputed/
 cache/*
 !cache/.gitkeep
 outputs/*

@@ -28,6 +28,19 @@ class CLIPRanker:
         self._model = None
         self._preprocess = None
         self._tokenizer = None
+        self._text_features_cache: dict[tuple[str, ...], torch.Tensor] = {}
+
+    def _text_features(self, prompts: Sequence[str]) -> torch.Tensor:
+        key = tuple(prompts)
+        cached = self._text_features_cache.get(key)
+        if cached is not None:
+            return cached
+        text_tensor = self._tokenizer(list(key)).to(self.device)
+        with torch.no_grad():
+            features = self._model.encode_text(text_tensor)
+            features = features / features.norm(dim=-1, keepdim=True)
+        self._text_features_cache[key] = features
+        return features
 
     def _ensure_loaded(self) -> bool:
         if not self.enabled:
@@ -59,12 +72,8 @@ class CLIPRanker:
         latent_features: np.ndarray | None = None,
     ) -> np.ndarray:
         if self._ensure_loaded():
-            text_tensor = self._tokenizer([prompt]).to(self.device)
+            text_features = self._text_features([prompt])
             with torch.no_grad():
-                text_features = self._model.encode_text(text_tensor)
-                text_features = text_features / text_features.norm(
-                    dim=-1, keepdim=True
-                )
                 score_batches = []
                 for start in range(0, len(images), self.batch_size):
                     image_tensor = torch.stack(
@@ -108,10 +117,8 @@ class CLIPRanker:
     ) -> np.ndarray | None:
         if not self._ensure_loaded():
             return None
-        text_tensor = self._tokenizer(list(prompts)).to(self.device)
+        text_features = self._text_features(prompts)
         with torch.no_grad():
-            text_features = self._model.encode_text(text_tensor)
-            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
             probability_batches = []
             for start in range(0, len(images), self.batch_size):
                 image_tensor = torch.stack(
@@ -142,13 +149,8 @@ class CLIPRanker:
         flat_prompts = [
             prompt for group in prompt_groups for prompt in group
         ]
-        text_tensor = self._tokenizer(flat_prompts).to(self.device)
+        text_features = self._text_features(flat_prompts)
         with torch.no_grad():
-            text_features = self._model.encode_text(text_tensor)
-            text_features = text_features / text_features.norm(
-                dim=-1,
-                keepdim=True,
-            )
             image_feature_batches = []
             for start in range(0, len(images), self.batch_size):
                 image_tensor = torch.stack(

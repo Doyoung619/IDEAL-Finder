@@ -111,9 +111,6 @@ async def submit_basic_info(request: Request, db: Session = Depends(get_db)):
         "age_band",
         "gender",
         "preferred_target_gender",
-        "preferred_age_appearance",
-        "dating_experience",
-        "image_selection_importance",
     ]
     if any(not form.get(field) for field in required) or form.get("honest") != "yes":
         return request.app.state.templates.TemplateResponse(
@@ -130,9 +127,9 @@ async def submit_basic_info(request: Request, db: Session = Depends(get_db)):
     participant.gender = str(form["gender"])
     participant.preferred_target_gender = str(form["preferred_target_gender"])
     participant.preferred_face_region = "east_asian_only"
-    participant.preferred_age_appearance = str(form["preferred_age_appearance"])
-    participant.dating_experience = str(form["dating_experience"])
-    participant.image_selection_importance = int(form["image_selection_importance"])
+    participant.preferred_age_appearance = "twenties_boost"
+    participant.dating_experience = None
+    participant.image_selection_importance = None
     participant.honest_participation = True
     participant.status = "basic_info_complete"
     db.commit()
@@ -191,16 +188,7 @@ async def start_experiment1(request: Request, db: Session = Depends(get_db)):
         return redirect("/answer-key")
     existing = find_block(db, participant, block_index)
     if existing is None:
-        strategy_parameters = {
-            "condition_gender": (
-                participant.preferred_target_gender
-                if participant.preferred_target_gender in {"female", "male"}
-                else request.app.state.config.demographic.gender
-            ),
-            "condition_races": list(
-                request.app.state.config.demographic.race_targets
-            ),
-        }
+        strategy_parameters = {"prior_mode": "standard_normal"}
         get_or_create_block(
             db,
             request.app.state.runtime,

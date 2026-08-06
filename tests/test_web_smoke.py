@@ -27,6 +27,9 @@ def test_demo_flow_reaches_first_generated_round(tmp_path):
     with TestClient(app) as client:
         response = client.get("/")
         assert response.status_code == 200
+        assert 'class="loading-screen"' in response.text
+        assert "app.css?v=4" in response.text
+        assert "app.js?v=4" in response.text
         assert "동의하고 시작하기" in response.text
 
         response = client.post(
@@ -41,9 +44,6 @@ def test_demo_flow_reaches_first_generated_round(tmp_path):
                 "age_band": "20s",
                 "gender": "female",
                 "preferred_target_gender": "male",
-                "preferred_age_appearance": "twenties_boost",
-                "dating_experience": "past",
-                "image_selection_importance": "4",
                 "honest": "yes",
             },
             follow_redirects=False,
@@ -81,5 +81,7 @@ def test_demo_flow_reaches_first_generated_round(tmp_path):
         assert block.strategy_mode == "entropy"
         assert participant.preferred_face_region == "east_asian_only"
         assert participant.preferred_age_appearance == "twenties_boost"
-        assert '"condition_gender":"male"' in block.strategy_parameters_json
+        assert participant.dating_experience is None
+        assert participant.image_selection_importance is None
+        assert '"prior_mode":"standard_normal"' in block.strategy_parameters_json
         assert all(image.latent_path.endswith(".npy") for image in images)

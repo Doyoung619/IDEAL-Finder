@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import warnings
 
 import numpy as np
 
@@ -98,7 +99,9 @@ class ExperimentRuntime:
             gender=condition_gender,
             race="_".join(condition_races),
         )
-        if prior_path not in self._conditional_priors:
+        force_standard_normal = values.get("prior_mode") == "standard_normal"
+        cache_key = prior_path + ("::standard_normal" if force_standard_normal else "")
+        if cache_key not in self._conditional_priors:
             if self.config.generator.mode == "demo":
                 dimension = min(
                     int(self.config.conditional_prior.dimension),
@@ -117,6 +120,44 @@ class ExperimentRuntime:
                     accepted_samples=1,
                     seed=int(self.config.query.seed),
                 )
+            elif force_standard_normal or not Path(prior_path).exists():
+                if not self.projector.is_fitted:
+                    self.ensure_ready()
+                model = self.projector.model
+                if model is None:
+                    raise RuntimeError("Latent PCA projector is not fitted")
+                dimension = min(
+                    int(self.config.conditional_prior.dimension),
+                    int(model.components_.shape[0]),
+                )
+                warnings.warn(
+                    "Using the fitted generic latent PCA prior with a standard "
+                    "normal theta prior for entropy exploration.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                prior = ConditionalPCAPrior(
+                    condition=DemographicCondition(
+                        condition_gender, condition_races
+                    ),
+                    mu_w=np.asarray(model.mean_, dtype=np.float64),
+                    components=np.asarray(
+                        model.components_[:dimension], dtype=np.float64
+                    ),
+                    eigenvalues=np.asarray(
+                        model.explained_variance_[:dimension], dtype=np.float64
+                    ),
+                    explained_variance_ratio=np.asarray(
+                        model.explained_variance_ratio_[:dimension],
+                        dtype=np.float64,
+                    ),
+                    accepted_samples=int(getattr(model, "n_samples_", 0)),
+                    generator_metadata={
+                        "fallback": "generic_latent_pca",
+                        "requested_prior": prior_path,
+                    },
+                    seed=int(self.config.query.seed),
+                )
             else:
                 prior = ConditionalPCAPrior.load(prior_path)
             if prior.w_dimension != self.generator.latent_dim:
@@ -130,5 +171,5 @@ class ExperimentRuntime:
                     "Conditional prior condition does not match the requested "
                     f"gender/races: {condition_gender}/{condition_races}"
                 )
-            self._conditional_priors[prior_path] = prior
-        return self._conditional_priors[prior_path]
+            self._conditional_priors[cache_key] = prior
+        return self._conditional_priors[cache_key]

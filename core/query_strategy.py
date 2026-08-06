@@ -42,6 +42,7 @@ class EntropyQueryStrategy:
                 num_restarts=int(parameters["num_restarts"]),
                 optimization_steps=int(parameters["optimization_steps"]),
                 learning_rate=float(parameters["learning_rate"]),
+                exploration_radius=float(parameters["exploration_radius"]),
                 seed=int(parameters["seed"]),
                 device=resolve_device(str(parameters["device"])),
             )
@@ -214,6 +215,7 @@ def create_query_strategy(
         "num_restarts": config.query.num_restarts,
         "optimization_steps": config.query.optimization_steps,
         "learning_rate": config.query.learning_rate,
+        "exploration_radius": config.query.exploration_radius,
         "seed": config.query.seed,
         "device": config.generator.device,
     }

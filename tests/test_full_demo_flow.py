@@ -61,9 +61,6 @@ def test_complete_demo_experiment(tmp_path):
                 "age_band": "30s",
                 "gender": "male",
                 "preferred_target_gender": "female",
-                "preferred_age_appearance": "twenties_boost",
-                "dating_experience": "current",
-                "image_selection_importance": "3",
                 "honest": "yes",
             },
         )

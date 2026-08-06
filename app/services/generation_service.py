@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,7 +22,7 @@ from app.services.participant_service import m_order
 from app.services.profile_service import build_profile_prompt
 from core.latent_sampler import farthest_point_sampling
 from core.preference_model import PairwisePreferenceModel
-from core.utils import latent_fingerprint
+from core.utils import latent_fingerprint, save_json
 from experiments.design import stable_seed
 from experiments.logging_utils import json_dumps, json_loads
 
@@ -235,8 +235,7 @@ def _generate_entropy_round(
 ) -> list[LatentImage]:
     """Optimize, decode, persist, and return one direct synthetic query set."""
     strategy_parameters = json_loads(block.strategy_parameters_json or "{}")
-    strategy = runtime.strategy_for("entropy", strategy_parameters)
-    center = np.load(block.mu_path)
+    prior = runtime.conditional_prior(strategy_parameters)
     seed = (
         block.initial_seed
         if round_id == 1
@@ -244,27 +243,39 @@ def _generate_entropy_round(
             f"{block.block_id}:round:{round_id}", participant.base_seed
         )
     )
-    proposal = strategy.propose(
-        center=center,
-        sigma=1.0,
-        count=block.m_value,
-        seed=seed,
-        state_path=block.strategy_state_path,
-        round_id=round_id,
-        display_count=block.m_value,
+    random = np.random.default_rng(seed)
+    display_features = prior.sample_theta(block.m_value, generator=random)
+    display_latents = np.asarray(
+        prior.theta_to_w(display_features), dtype=np.float32
     )
-    if len(proposal.latents) != block.m_value:
-        raise RuntimeError(
-            "Entropy Query returned an unexpected number of synthetic queries"
-        )
-    evaluated = evaluate_candidates(runtime, proposal.latents)
+    images = runtime.generator.decode(display_latents)
+    display_candidates = [
+        _unfiltered_candidate(latent, image)
+        for latent, image in zip(display_latents, images)
+    ]
+    display_roles = [
+        f"random_prior_{index + 1}" for index in range(block.m_value)
+    ]
     round_directory = (
         Path(block.strategy_state_path).parent / f"round_{round_id:02d}"
     )
     image_directory = round_directory / "decoded_images"
     image_directory.mkdir(parents=True, exist_ok=True)
+    np.save(round_directory / "query_points.npy", display_features)
+    np.save(round_directory / "query_center.npy", prior.theta_mean)
+    np.save(round_directory / "posterior_mean.npy", prior.theta_mean)
+    np.save(round_directory / "posterior_covariance.npy", prior.theta_covariance)
+    np.save(round_directory / "map_estimate.npy", prior.theta_mean)
+    save_json(
+        round_directory / "entropy_metrics.json",
+        {
+            "sampling": "independent_standard_normal_prior",
+            "posterior_update": "recorded_but_not_used_for_sampling",
+            "exploration_radius": None,
+        },
+    )
     artifacts: list[LatentImage] = []
-    for display_index, candidate in enumerate(evaluated):
+    for display_index, candidate in enumerate(display_candidates):
         candidate.image.save(
             image_directory / f"query_{display_index + 1:02d}.png",
             format="PNG",
@@ -273,13 +284,14 @@ def _generate_entropy_round(
         metadata = {
             "search_version": runtime.config.search.version,
             "query_algorithm": "entropy",
-            "proposal_backend": proposal.backend,
-            "proposal_feature": proposal.features[display_index].tolist(),
+            "proposal_backend": "random_standard_normal_prior",
+            "proposal_feature": display_features[display_index].tolist(),
             "display_index": display_index,
-            "proposal_role": (
-                proposal.roles[display_index] if proposal.roles else None
-            ),
-            "entropy_metrics": proposal.metadata,
+            "proposal_role": display_roles[display_index],
+            "entropy_metrics": {
+                "sampling": "independent_standard_normal_prior",
+                "posterior_update": "recorded_but_not_used_for_sampling",
+            },
         }
         artifacts.append(
             persist_candidate(
@@ -300,6 +312,92 @@ def _generate_entropy_round(
     return artifacts
 
 
+def _unfiltered_candidate(latent: np.ndarray, image: Image.Image) -> EvaluatedCandidate:
+    """Wrap an entropy query without demographic filtering or CLIP scoring."""
+    return EvaluatedCandidate(
+        latent=np.asarray(latent, dtype=np.float32),
+        image=image,
+        gender_label="not_evaluated",
+        gender_confidence=0.0,
+        gender_backend="entropy_unfiltered",
+        is_adult=True,
+        adult_confidence=0.0,
+        adult_backend="entropy_unfiltered",
+        is_clean_portrait=True,
+        portrait_confidence=0.0,
+        portrait_backend="entropy_unfiltered",
+        face_region_label="not_evaluated",
+        east_asian_confidence=0.0,
+        face_region_backend="entropy_unfiltered",
+        age_appearance_label="not_evaluated",
+        twenties_confidence=0.0,
+        twenties_thirties_confidence=0.0,
+        age_appearance_backend="entropy_unfiltered",
+        quality_score=0.0,
+        quality_accepted=True,
+        face_detected=True,
+        quality_backend="entropy_unfiltered",
+    )
+
+
+def _evaluate_gender_only(runtime, latents: np.ndarray) -> list[EvaluatedCandidate]:
+    images = runtime.generator.decode(latents)
+    estimates = runtime.gender_controller.estimate(
+        images,
+        latents=latents,
+        generator_name=runtime.generator.generator_name,
+    )
+    candidates = []
+    for latent, image, estimate in zip(latents, images, estimates):
+        quality = runtime.quality_filter.evaluate(
+            image,
+            require_face_detection=not runtime.generator.generator_name.startswith(
+                "demo"
+            ),
+        )
+        candidates.append(
+            replace(
+                _unfiltered_candidate(latent, image),
+                gender_label=estimate.label,
+                gender_confidence=estimate.confidence,
+                gender_backend=estimate.backend,
+                quality_score=quality.score,
+                quality_accepted=quality.accepted,
+                face_detected=quality.face_detected,
+                quality_backend=quality.backend,
+            )
+        )
+    return candidates
+
+
+def _generate_gender_only_candidates(
+    runtime,
+    target_gender: str | None,
+    count: int,
+    seed: int,
+) -> list[EvaluatedCandidate]:
+    if target_gender in {None, "", "any"}:
+        latents = runtime.generator.sample_prior(count, seed)
+        return _evaluate_gender_only(runtime, latents)
+    accepted: list[EvaluatedCandidate] = []
+    for attempt in range(int(runtime.config.filters.max_filter_attempts)):
+        pool = runtime.generator.sample_prior(
+            max(count * 8, 16), seed + attempt * 15485863
+        )
+        accepted.extend(
+            candidate
+            for candidate in _evaluate_gender_only(runtime, pool)
+            if candidate.quality_accepted
+            and candidate.face_detected
+            and runtime.gender_controller.accepts(
+                _gender_estimate(candidate), target_gender
+            )
+        )
+        if len(accepted) >= count:
+            return accepted[:count]
+    raise RuntimeError("Could not produce enough gender-matched entropy queries.")
+
+
 def update_block_after_selection(
     db: Session,
     runtime,
@@ -311,6 +409,21 @@ def update_block_after_selection(
     if block.strategy_mode != "entropy":
         raise ValueError("Only the entropy query algorithm is currently supported.")
     strategy_parameters = json_loads(block.strategy_parameters_json or "{}")
+    if strategy_parameters.get("prior_mode") == "standard_normal":
+        # Random-prior rounds do not maintain an optimization state, but keep
+        # the observed choice artifact for the same downstream analysis shape.
+        round_directory = (
+            Path(block.strategy_state_path).parent / f"round_{round_id:02d}"
+        )
+        round_directory.mkdir(parents=True, exist_ok=True)
+        save_json(
+            round_directory / "observed_choice.json",
+            {
+                "round": round_id,
+                "observed_choice": shown_image_ids.index(selected_image_id),
+            },
+        )
+        return
     strategy = runtime.strategy_for(block.strategy_mode, strategy_parameters)
     shown = [db.get(LatentImage, image_id) for image_id in shown_image_ids]
     selected = db.get(LatentImage, selected_image_id)
@@ -413,6 +526,7 @@ def get_or_generate_recommendation_set(
         evaluated,
         participant.preferred_target_gender,
         required=set_size,
+        target_age_appearance=participant.preferred_age_appearance,
     )
 
     prompt = ""
@@ -576,7 +690,19 @@ def generate_filtered_prior_candidates(
     target_age_appearance: str | None,
     count: int,
     seed: int,
+    use_precomputed_cache: bool = True,
 ) -> list[EvaluatedCandidate]:
+    if use_precomputed_cache:
+        cached = _load_precomputed_candidates(
+            runtime,
+            target_gender,
+            target_face_region,
+            target_age_appearance,
+            count,
+            seed,
+        )
+        if cached is not None:
+            return cached
     pool_size = max(count * runtime.config.experiment.candidate_pool_multiplier, count)
     pool_size = _region_pool_size(
         runtime,
@@ -586,25 +712,38 @@ def generate_filtered_prior_candidates(
         required_count=count,
     )
     accepted: list[EvaluatedCandidate] = []
+    evaluation_batch_size = max(
+        int(runtime.config.clip.batch_size),
+        int(getattr(runtime.generator, "batch_size", 1)),
+    )
     for attempt in range(int(runtime.config.filters.max_filter_attempts)):
         latents = runtime.generator.sample_prior(
             pool_size,
             seed + attempt * 15485863,
         )
-        evaluated = evaluate_candidates(runtime, latents)
-        accepted.extend(
-            candidate
-            for candidate in evaluated
-            if candidate.quality_accepted
-            and candidate.face_detected
-            and _east_asian_accepted(runtime, candidate)
-            and _adult_accepted(runtime, candidate)
-            and _portrait_accepted(runtime, candidate)
-            and runtime.gender_controller.accepts(
-                _gender_estimate(candidate),
-                target_gender,
+        # Stop evaluating the safety pool once enough hard-valid faces exist.
+        # This avoids CLIP-scoring all 512 candidates for a small request.
+        for start in range(0, len(latents), evaluation_batch_size):
+            evaluated = evaluate_candidates(
+                runtime,
+                latents[start : start + evaluation_batch_size],
             )
-        )
+            accepted.extend(
+                candidate
+                for candidate in evaluated
+                if candidate.quality_accepted
+                and candidate.face_detected
+                and _east_asian_accepted(runtime, candidate)
+                and _matches_age_preference(candidate, target_age_appearance)
+                and _adult_accepted(runtime, candidate)
+                and _portrait_accepted(runtime, candidate)
+                and runtime.gender_controller.accepts(
+                    _gender_estimate(candidate),
+                    target_gender,
+                )
+            )
+            if len(accepted) >= count:
+                break
         if len(accepted) >= count:
             break
     if len(accepted) < count:
@@ -621,6 +760,104 @@ def generate_filtered_prior_candidates(
         reverse=True,
     )
     return accepted[:count]
+
+
+def _precomputed_candidate_path(
+    runtime,
+    target_gender: str | None,
+    target_face_region: str | None,
+    target_age_appearance: str | None,
+) -> Path | None:
+    if target_face_region != "east_asian_only" or target_age_appearance != "twenties_boost":
+        return None
+    if target_gender not in {"female", "male"}:
+        return None
+    return (
+        Path(runtime.config.paths.data_dir)
+        / "precomputed"
+        / f"initial_{target_gender}_east_asian_20s.npz"
+    )
+
+
+def _load_precomputed_candidates(
+    runtime,
+    target_gender: str | None,
+    target_face_region: str | None,
+    target_age_appearance: str | None,
+    count: int,
+    seed: int,
+) -> list[EvaluatedCandidate] | None:
+    path = _precomputed_candidate_path(
+        runtime,
+        target_gender,
+        target_face_region,
+        target_age_appearance,
+    )
+    if path is None or not path.exists():
+        return None
+    try:
+        with np.load(path, allow_pickle=False) as cache:
+            latents = np.asarray(cache["latents"], dtype=np.float32)
+            records = json.loads(str(cache["records_json"].item()))
+        if len(latents) < count or len(records) != len(latents):
+            return None
+        # A startup cache is a reusable bank, not a fixed answer key. Shuffle
+        # its deterministic order per round so fallback candidates do not
+        # repeatedly decode the same first few faces.
+        selected_indices = np.random.default_rng(seed).permutation(len(latents))[:count]
+        selected_latents = latents[selected_indices]
+        selected_records = [records[int(index)] for index in selected_indices]
+        images = runtime.generator.decode(selected_latents)
+        return [
+            EvaluatedCandidate(
+                latent=latent,
+                image=image,
+                **record,
+            )
+            for latent, image, record in zip(selected_latents, images, selected_records)
+        ]
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def save_precomputed_candidates(
+    runtime,
+    candidates: list[EvaluatedCandidate],
+    target_gender: str,
+    target_face_region: str = "east_asian_only",
+    target_age_appearance: str = "twenties_boost",
+) -> Path:
+    path = _precomputed_candidate_path(
+        runtime,
+        target_gender,
+        target_face_region,
+        target_age_appearance,
+    )
+    if path is None:
+        raise ValueError("Precomputed candidates require the fixed demographic filters")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    records = []
+    for candidate in candidates:
+        records.append(
+            {
+                field: getattr(candidate, field)
+                for field in (
+                    "gender_label", "gender_confidence", "gender_backend",
+                    "is_adult", "adult_confidence", "adult_backend",
+                    "is_clean_portrait", "portrait_confidence", "portrait_backend",
+                    "face_region_label", "east_asian_confidence", "face_region_backend",
+                    "age_appearance_label", "twenties_confidence",
+                    "twenties_thirties_confidence", "age_appearance_backend",
+                    "quality_score", "quality_accepted", "face_detected", "quality_backend",
+                )
+            }
+        )
+    np.savez_compressed(
+        path,
+        latents=np.asarray([candidate.latent for candidate in candidates], dtype=np.float32),
+        records_json=np.asarray(json.dumps(records, ensure_ascii=False)),
+    )
+    return path
 
 
 def evaluate_candidates(runtime, latents: np.ndarray) -> list[EvaluatedCandidate]:
@@ -732,6 +969,7 @@ def accepted_candidate_indices(
     evaluated: list[EvaluatedCandidate],
     target_gender: str | None,
     required: int,
+    target_age_appearance: str | None,
 ) -> tuple[list[int], bool]:
     strict = [
         index
@@ -739,6 +977,7 @@ def accepted_candidate_indices(
         if candidate.quality_accepted
         and candidate.face_detected
         and _east_asian_accepted(runtime, candidate)
+        and _matches_age_preference(candidate, target_age_appearance)
         and _adult_accepted(runtime, candidate)
         and _portrait_accepted(runtime, candidate)
         and runtime.gender_controller.accepts(
@@ -758,6 +997,7 @@ def strict_candidate_indices(
     runtime,
     evaluated: list[EvaluatedCandidate],
     target_gender: str | None,
+    target_age_appearance: str | None,
 ) -> list[int]:
     return [
         index
@@ -765,6 +1005,7 @@ def strict_candidate_indices(
         if candidate.quality_accepted
         and candidate.face_detected
         and _east_asian_accepted(runtime, candidate)
+        and _matches_age_preference(candidate, target_age_appearance)
         and _adult_accepted(runtime, candidate)
         and _portrait_accepted(runtime, candidate)
         and runtime.gender_controller.accepts(
