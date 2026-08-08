@@ -51,7 +51,7 @@ class FaceQualityFilter:
             + 0.25 * sharpness
             + 0.15 * color_range
         )
-        face_detected = True
+        face_detected = not require_face_detection
         backend = "contrast_exposure_sharpness"
         if require_face_detection and self.face_detector is not None:
             gray_uint8 = (gray * 255).astype(np.uint8)
@@ -64,6 +64,8 @@ class FaceQualityFilter:
             )
             face_detected = len(faces) > 0
             backend = "opencv_haar+contrast_exposure_sharpness"
+        elif require_face_detection:
+            backend = "face_detector_unavailable+contrast_exposure_sharpness"
         elif not require_face_detection:
             backend = "demo_bypass+contrast_exposure_sharpness"
         accepted = face_detected and score >= self.minimum_quality

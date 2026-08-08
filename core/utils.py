@@ -6,13 +6,17 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import torch
+
+try:
+    import torch
+except ImportError:  # pragma: no cover - exercised in Vercel slim installs.
+    torch = None
 
 
 def resolve_device(requested: str = "auto") -> str:
     if requested != "auto":
         return requested
-    return "cuda" if torch.cuda.is_available() else "cpu"
+    return "cuda" if torch is not None and torch.cuda.is_available() else "cpu"
 
 
 def latent_fingerprint(latent: np.ndarray) -> str:
@@ -31,4 +35,3 @@ def save_json(path: str | Path, payload: dict[str, Any]) -> None:
 
 def relative_web_path(path: str | Path, project_root: str | Path) -> str:
     return Path(path).resolve().relative_to(Path(project_root).resolve()).as_posix()
-

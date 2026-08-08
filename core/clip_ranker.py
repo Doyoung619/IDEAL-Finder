@@ -4,10 +4,14 @@ import hashlib
 from typing import Sequence
 
 import numpy as np
-import torch
 from PIL import Image
 
 from core.utils import resolve_device
+
+try:
+    import torch
+except ImportError:  # pragma: no cover - exercised in Vercel slim installs.
+    torch = None
 
 
 class CLIPRanker:
@@ -30,7 +34,10 @@ class CLIPRanker:
         self._tokenizer = None
 
     def _ensure_loaded(self) -> bool:
-        if not self.enabled:
+        if not self.enabled or torch is None:
+            if torch is None:
+                self.enabled = False
+                self.backend = "latent_hash_fallback"
             return False
         if self._model is not None:
             return True

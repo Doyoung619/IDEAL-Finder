@@ -7,11 +7,14 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 
 import numpy as np
-import torch
-import torch.nn.functional as functional
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from core.utils import resolve_device
+
+try:
+    import torch
+except ImportError:  # pragma: no cover - exercised in Vercel slim installs.
+    torch = None
 
 
 class FaceGenerator(ABC):
@@ -57,6 +60,11 @@ class StyleGAN2ADAGenerator(FaceGenerator):
     @property
     def network(self):
         if self._network is None:
+            if torch is None:
+                raise RuntimeError(
+                    "Torch is required for StyleGAN2-ADA generation. "
+                    "Use IDEAL_DEMO=1 for the lightweight web demo."
+                )
             if not self.repo_path.exists():
                 raise FileNotFoundError(
                     f"StyleGAN2-ADA source not found: {self.repo_path}. "
@@ -193,7 +201,7 @@ class StyleGAN2ADAGenerator(FaceGenerator):
 
 
 class DemoFaceGenerator(FaceGenerator):
-    generator_name = "demo_torch_portrait_decoder"
+    generator_name = "demo_numpy_portrait_decoder"
 
     def __init__(
         self,
@@ -214,187 +222,106 @@ class DemoFaceGenerator(FaceGenerator):
         return random.standard_normal((count, self.latent_dim)).astype(np.float32)
 
     def decode(self, latents: np.ndarray) -> list[Image.Image]:
-        latent_batch = torch.from_numpy(
-            np.atleast_2d(latents).astype(np.float32)
-        ).to(self.device)
-        with torch.no_grad():
-            images = self._render_portraits(latent_batch)
-            images = (
-                images.mul(255).clamp(0, 255).to(torch.uint8).permute(0, 2, 3, 1)
+        latent_batch = np.atleast_2d(latents).astype(np.float32)
+        return [self._render_portrait(latent) for latent in latent_batch]
+
+    def _render_portrait(self, latent: np.ndarray) -> Image.Image:
+        size = int(self.output_resolution)
+        image = Image.new(
+            "RGB",
+            (size, size),
+            self._color(latent, (1, 2, 3), (158, 171, 184)),
+        )
+        draw = ImageDraw.Draw(image, "RGBA")
+
+        def v(index: int, scale: float = 1.0) -> float:
+            return float(np.tanh(latent[index % self.latent_dim]) * scale)
+
+        def point(x: float, y: float) -> tuple[int, int]:
+            return (
+                int((x + 1.0) * 0.5 * size),
+                int((y + 1.0) * 0.5 * size),
             )
-        return [
-            Image.fromarray(array.cpu().numpy(), "RGB")
-            for array in images
-        ]
-
-    def _render_portraits(self, latent: torch.Tensor) -> torch.Tensor:
-        batch = latent.shape[0]
-        size = self.output_resolution
-        coordinates = torch.linspace(-1.0, 1.0, size, device=self.device)
-        y_grid, x_grid = torch.meshgrid(coordinates, coordinates, indexing="ij")
-        x_grid = x_grid.expand(batch, -1, -1)
-        y_grid = y_grid.expand(batch, -1, -1)
-
-        def value(index: int, scale: float = 1.0) -> torch.Tensor:
-            return torch.tanh(latent[:, index % self.latent_dim]) * scale
-
-        def color(red: int, green: int, blue: int, base: tuple[float, float, float]):
-            channels = [
-                torch.sigmoid(latent[:, index % self.latent_dim]) * 0.18 + offset
-                for index, offset in zip((red, green, blue), base)
-            ]
-            return torch.stack(channels, dim=1).clamp(0.0, 1.0)
 
         def ellipse(
-            center_x: torch.Tensor,
-            center_y: torch.Tensor,
-            radius_x: torch.Tensor,
-            radius_y: torch.Tensor,
-            softness: float = 45.0,
-        ) -> torch.Tensor:
-            distance = (
-                ((x_grid - center_x[:, None, None]) / radius_x[:, None, None]) ** 2
-                + ((y_grid - center_y[:, None, None]) / radius_y[:, None, None]) ** 2
-            )
-            return torch.sigmoid((1.0 - distance) * softness)
+            center_x: float,
+            center_y: float,
+            radius_x: float,
+            radius_y: float,
+            fill,
+        ) -> None:
+            left, top = point(center_x - radius_x, center_y - radius_y)
+            right, bottom = point(center_x + radius_x, center_y + radius_y)
+            draw.ellipse((left, top, right, bottom), fill=fill)
 
-        def gaussian(
-            center_x: torch.Tensor,
-            center_y: torch.Tensor,
-            width: float,
-            height: float,
-        ) -> torch.Tensor:
-            return torch.exp(
-                -(
-                    ((x_grid - center_x[:, None, None]) / width) ** 2
-                    + ((y_grid - center_y[:, None, None]) / height) ** 2
+        gender_axis = v(0)
+        shoulder = self._color(latent, (20, 21, 22), (40, 50, 62))
+        skin = self._color(latent, (4, 5, 6), (170, 130, 102))
+        hair = self._color(latent, (10, 11, 12), (28, 24, 22))
+        lip = self._color(latent, (26, 27, 28), (142, 57, 62))
+
+        ellipse(0.0, 0.98, 0.86, 0.42, (*shoulder, 255))
+        ellipse(0.0, 0.58, 0.19, 0.32, (*skin, 255))
+
+        face_width = 0.48 + 0.06 * v(7) + 0.03 * gender_axis
+        face_height = 0.67 + 0.04 * v(8)
+        face_x = v(9, 0.025)
+        face_y = -0.03
+        hair_height = 0.80 + 0.08 * v(13) - 0.12 * gender_axis
+
+        ellipse(face_x, face_y - 0.10, face_width + 0.10, hair_height, (*hair, 255))
+        ellipse(face_x, face_y, face_width, face_height, (*skin, 255))
+
+        fringe_x = face_x + v(14, 0.08)
+        ellipse(fringe_x, -0.56, 0.42, 0.18, (*hair, 235))
+
+        eye_spacing = 0.19 + 0.025 * v(16)
+        eye_y = -0.13 + 0.025 * v(17)
+        eye_width = 0.055 + 0.012 * v(18)
+        ellipse(-eye_spacing, eye_y, eye_width, 0.032, (25, 25, 28, 255))
+        ellipse(eye_spacing, eye_y, eye_width, 0.032, (25, 25, 28, 255))
+        ellipse(-eye_spacing, eye_y - 0.09, 0.13, 0.018, (*hair, 220))
+        ellipse(eye_spacing, eye_y - 0.09, 0.13, 0.018, (*hair, 220))
+
+        nose_x = v(19, 0.018)
+        nose_top = point(nose_x, -0.03)
+        nose_bottom = point(nose_x + v(22, 0.018), 0.18)
+        draw.line(
+            (nose_top, nose_bottom),
+            fill=(*self._shade(skin, 0.78), 120),
+            width=max(1, size // 55),
+        )
+
+        mouth_y = 0.32 + v(23, 0.035)
+        mouth_width = 0.16 + 0.035 * v(24)
+        ellipse(v(25, 0.018), mouth_y, mouth_width, 0.030, (*lip, 210))
+        ellipse(-0.30, 0.18, 0.13, 0.08, (230, 112, 112, 30))
+        ellipse(0.30, 0.18, 0.13, 0.08, (230, 112, 112, 30))
+
+        return image
+
+    def _color(
+        self,
+        latent: np.ndarray,
+        indices: tuple[int, int, int],
+        base: tuple[int, int, int],
+    ) -> tuple[int, int, int]:
+        values = []
+        for index, channel in zip(indices, base):
+            offset = int(
+                (
+                    1.0
+                    / (1.0 + np.exp(-latent[index % self.latent_dim]))
+                    - 0.5
                 )
-                * 3.0
+                * 46
             )
-
-        background = color(1, 2, 3, (0.62, 0.67, 0.72))
-        image = background[:, :, None, None].expand(-1, -1, size, size).clone()
-
-        shoulder_color = color(20, 21, 22, (0.12, 0.18, 0.24))
-        shoulder_mask = ellipse(
-            torch.zeros(batch, device=self.device),
-            torch.full((batch,), 0.92, device=self.device),
-            torch.full((batch,), 0.86, device=self.device),
-            torch.full((batch,), 0.46, device=self.device),
-        )
-        image = self._blend(image, shoulder_color, shoulder_mask)
-
-        skin = color(4, 5, 6, (0.58, 0.43, 0.34))
-        neck_mask = ellipse(
-            torch.zeros(batch, device=self.device),
-            torch.full((batch,), 0.58, device=self.device),
-            torch.full((batch,), 0.20, device=self.device),
-            torch.full((batch,), 0.34, device=self.device),
-        )
-        image = self._blend(image, skin, neck_mask)
-
-        gender_axis = value(0)
-        face_width = 0.49 + 0.06 * value(7) + 0.035 * gender_axis
-        face_height = 0.68 + 0.04 * value(8)
-        face_y = torch.full((batch,), -0.03, device=self.device)
-        face_mask = ellipse(
-            value(9, 0.025),
-            face_y,
-            face_width,
-            face_height,
-        )
-        image = self._blend(image, skin, face_mask)
-
-        hair_color = color(10, 11, 12, (0.05, 0.035, 0.025))
-        hair_length = 0.10 - 0.18 * gender_axis + 0.08 * value(13)
-        outer_hair = ellipse(
-            value(9, 0.02),
-            face_y - 0.09,
-            face_width + 0.09,
-            face_height + 0.12 + hair_length.clamp(-0.08, 0.25),
-        )
-        lower_cut = torch.sigmoid((-y_grid + 0.68 + hair_length[:, None, None]) * 40)
-        hair_mask = outer_hair * lower_cut * (1.0 - face_mask * 0.86)
-        fringe = gaussian(
-            value(14, 0.08),
-            torch.full((batch,), -0.54, device=self.device),
-            0.42,
-            0.24,
-        )
-        hair_mask = torch.maximum(hair_mask, fringe * (0.65 + 0.25 * value(15))[:, None, None])
-        image = self._blend(image, hair_color, hair_mask.clamp(0, 1))
-
-        eye_spacing = 0.19 + 0.025 * value(16)
-        eye_y = -0.13 + 0.025 * value(17)
-        eye_size = 0.045 + 0.012 * value(18) - 0.004 * gender_axis
-        left_eye = gaussian(-eye_spacing, eye_y, float(eye_size.mean()), 0.035)
-        right_eye = gaussian(eye_spacing, eye_y, float(eye_size.mean()), 0.035)
-        eye_mask = (left_eye + right_eye).clamp(0, 1) * face_mask
-        image = self._blend(
-            image,
-            torch.full((batch, 3), 0.08, device=self.device),
-            eye_mask,
-        )
-
-        brow_y = eye_y - 0.095
-        brow_mask = (
-            gaussian(-eye_spacing, brow_y, 0.13, 0.025)
-            + gaussian(eye_spacing, brow_y, 0.13, 0.025)
-        ).clamp(0, 1)
-        image = self._blend(image, hair_color * 0.72, brow_mask * face_mask)
-
-        nose = gaussian(
-            value(19, 0.018),
-            torch.full((batch,), 0.08, device=self.device),
-            0.045,
-            0.17,
-        )
-        nose_color = (skin * 0.82).clamp(0, 1)
-        image = self._blend(image, nose_color, nose * 0.18 * face_mask)
-
-        smile = value(23, 0.035)
-        mouth_y = 0.32 + smile
-        mouth_width = 0.16 + 0.035 * value(24)
-        mouth = gaussian(
-            value(25, 0.018),
-            mouth_y,
-            float(mouth_width.mean()),
-            0.032,
-        )
-        lip_color = color(26, 27, 28, (0.34, 0.12, 0.13))
-        image = self._blend(image, lip_color, mouth * face_mask * 0.8)
-
-        cheek = (
-            gaussian(
-                torch.full((batch,), -0.30, device=self.device),
-                torch.full((batch,), 0.18, device=self.device),
-                0.16,
-                0.11,
-            )
-            + gaussian(
-                torch.full((batch,), 0.30, device=self.device),
-                torch.full((batch,), 0.18, device=self.device),
-                0.16,
-                0.11,
-            )
-        ).clamp(0, 1)
-        image = self._blend(image, torch.tensor([[0.82, 0.40, 0.38]], device=self.device).repeat(batch, 1), cheek * 0.08)
-
-        return functional.interpolate(
-            image,
-            size=(self.output_resolution, self.output_resolution),
-            mode="bilinear",
-            align_corners=False,
-        ).clamp(0, 1)
+            values.append(int(np.clip(channel + offset, 0, 255)))
+        return tuple(values)
 
     @staticmethod
-    def _blend(
-        image: torch.Tensor,
-        color: torch.Tensor,
-        mask: torch.Tensor,
-    ) -> torch.Tensor:
-        alpha = mask[:, None, :, :].clamp(0, 1)
-        return image * (1 - alpha) + color[:, :, None, None] * alpha
+    def _shade(color: tuple[int, int, int], factor: float) -> tuple[int, int, int]:
+        return tuple(int(np.clip(channel * factor, 0, 255)) for channel in color)
 
 
 def create_generator(config) -> FaceGenerator:

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
@@ -28,6 +28,7 @@ from app.services.generation_service import (
     image_url,
     update_block_after_selection,
 )
+from app.services.artifact_storage import image_bytes
 from core.algorithm_catalog import (
     algorithm_catalog,
     catalog_by_key,
@@ -65,6 +66,31 @@ def consent_page(request: Request):
         request,
         "consent.html",
         template_context(request),
+    )
+
+
+@router.get("/generated/{image_id}.png")
+def generated_image(
+    request: Request,
+    image_id: str,
+    db: Session = Depends(get_db),
+):
+    participant = current_participant(request, db)
+    artifact = db.get(LatentImage, image_id)
+    if (
+        participant is None
+        or artifact is None
+        or artifact.participant_id != participant.participant_id
+    ):
+        raise HTTPException(status_code=404)
+    try:
+        payload = image_bytes(artifact)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404) from exc
+    return Response(
+        content=payload,
+        media_type="image/png",
+        headers={"Cache-Control": "private, max-age=3600"},
     )
 
 

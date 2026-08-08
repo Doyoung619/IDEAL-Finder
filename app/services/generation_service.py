@@ -18,6 +18,14 @@ from app.models import (
     ProfileChip,
     Selection,
 )
+from app.services.artifact_storage import (
+    array_to_npy_bytes,
+    ensure_block_files,
+    image_to_png_bytes,
+    load_latent,
+    persist_artifacts_in_db,
+    sync_block_files,
+)
 from app.services.participant_service import m_order
 from app.services.profile_service import build_profile_prompt
 from core.latent_sampler import farthest_point_sampling
@@ -170,6 +178,7 @@ def get_or_create_block(
         initial_state_id=latent_fingerprint(baseline),
         initial_seed=initial_seed,
         mu_path=str(mu_path),
+        mu_data=array_to_npy_bytes(baseline),
         sigma=1.0,
         strategy_state_path=str(state_path),
         strategy_parameters_json=json_dumps(strategy_parameters),
@@ -234,6 +243,7 @@ def _generate_entropy_round(
     round_id: int,
 ) -> list[LatentImage]:
     """Optimize, decode, persist, and return one direct synthetic query set."""
+    ensure_block_files(block)
     strategy_parameters = json_loads(block.strategy_parameters_json or "{}")
     strategy = runtime.strategy_for("entropy", strategy_parameters)
     center = np.load(block.mu_path)
@@ -257,6 +267,7 @@ def _generate_entropy_round(
         raise RuntimeError(
             "Entropy Query returned an unexpected number of synthetic queries"
         )
+    sync_block_files(block)
     evaluated = evaluate_candidates(runtime, proposal.latents)
     round_directory = (
         Path(block.strategy_state_path).parent / f"round_{round_id:02d}"
@@ -310,14 +321,15 @@ def update_block_after_selection(
 ) -> None:
     if block.strategy_mode != "entropy":
         raise ValueError("Only the entropy query algorithm is currently supported.")
+    ensure_block_files(block)
     strategy_parameters = json_loads(block.strategy_parameters_json or "{}")
     strategy = runtime.strategy_for(block.strategy_mode, strategy_parameters)
     shown = [db.get(LatentImage, image_id) for image_id in shown_image_ids]
     selected = db.get(LatentImage, selected_image_id)
     if selected is None or any(image is None for image in shown):
         raise ValueError("Selection refers to unknown latent images")
-    shown_latents = np.vstack([np.load(image.latent_path) for image in shown])
-    winner_latent = np.load(selected.latent_path)
+    shown_latents = np.vstack([load_latent(image) for image in shown])
+    winner_latent = load_latent(selected)
     center = np.load(block.mu_path)
     new_center, new_sigma = strategy.update(
         center=center,
@@ -328,6 +340,7 @@ def update_block_after_selection(
     )
     np.save(block.mu_path, new_center.astype(np.float32))
     block.sigma = new_sigma
+    sync_block_files(block)
     db.commit()
 
 
@@ -550,13 +563,13 @@ def fit_participant_preference_model(
         winner = db.get(LatentImage, selection.selected_image_id)
         if winner is None:
             continue
-        winner_latent = np.load(winner.latent_path)
+        winner_latent = load_latent(winner)
         for image_id in json_loads(selection.shown_image_ids, []):
             if image_id == selection.selected_image_id:
                 continue
             loser = db.get(LatentImage, image_id)
             if loser is not None:
-                pairs.append((winner_latent, np.load(loser.latent_path)))
+                pairs.append((winner_latent, load_latent(loser)))
     if not pairs:
         return None
     model = PairwisePreferenceModel(runtime.projector).fit(pairs)
@@ -991,10 +1004,12 @@ def persist_candidate(
     fingerprint = latent_fingerprint(candidate.latent)
     latent_path = artifact_dir / f"{fingerprint}.npy"
     image_path = artifact_dir / f"{fingerprint}.png"
+    latent_payload = array_to_npy_bytes(candidate.latent)
+    image_payload = image_to_png_bytes(candidate.image)
     if not latent_path.exists():
-        np.save(latent_path, candidate.latent.astype(np.float32))
+        latent_path.write_bytes(latent_payload)
     if not image_path.exists():
-        candidate.image.save(image_path, format="PNG", optimize=True)
+        image_path.write_bytes(image_payload)
 
     score_metadata = {
         **metadata,
@@ -1034,7 +1049,13 @@ def persist_candidate(
         stage_type=stage_type,
         batch_id=batch_id,
         latent_path=str(latent_path),
+        latent_data=(
+            latent_payload if persist_artifacts_in_db(runtime.config) else None
+        ),
         image_path=str(image_path),
+        image_data=(
+            image_payload if persist_artifacts_in_db(runtime.config) else None
+        ),
         generator_type=runtime.generator.generator_name,
         generator_seed=int(seed),
         gender_target=participant.preferred_target_gender,
@@ -1050,10 +1071,8 @@ def persist_candidate(
 
 
 def image_url(artifact: LatentImage, cache_dir: str) -> str:
-    relative = Path(artifact.image_path).resolve().relative_to(
-        Path(cache_dir).resolve()
-    )
-    return f"/generated/{relative.as_posix()}"
+    del cache_dir
+    return f"/generated/{artifact.image_id}.png"
 
 
 def _gender_estimate(candidate: EvaluatedCandidate):

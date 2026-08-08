@@ -7,9 +7,14 @@ from pathlib import Path
 import numpy as np
 
 from core.conditional_prior import ConditionalPCAPrior
-from core.entropy_query import EntropyQueryConfig, EntropyQuerySelector
 from core.preference_posterior import GaussianPreferencePosterior
 from core.utils import resolve_device, save_json
+
+try:
+    from core.entropy_query import EntropyQueryConfig, EntropyQuerySelector
+except ImportError:  # pragma: no cover - exercised in Vercel slim installs.
+    EntropyQueryConfig = None
+    EntropyQuerySelector = None
 
 
 @dataclass
@@ -21,6 +26,157 @@ class ProposalBatch:
     backend: str
     roles: list[str] | None = None
     metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class _SelectorConfig:
+    posterior_mc_samples: int
+    num_restarts: int
+    optimization_steps: int
+    learning_rate: float
+    seed: int
+    device: str = "cpu"
+
+
+@dataclass
+class _NumpyEntropyQueryResult:
+    query_points: np.ndarray
+    mutual_information: float
+    predictive_entropy: float
+    expected_conditional_entropy: float
+    min_pairwise_distance: float
+    max_mahalanobis_radius: float
+    restart: int
+    optimization_steps: int
+    initial_mutual_information: float
+
+    def metadata(self) -> dict:
+        return {
+            "mutual_information": self.mutual_information,
+            "predictive_entropy": self.predictive_entropy,
+            "expected_conditional_entropy": self.expected_conditional_entropy,
+            "min_pairwise_distance": self.min_pairwise_distance,
+            "max_mahalanobis_radius": self.max_mahalanobis_radius,
+            "restart": self.restart,
+            "selected_restart": self.restart,
+            "optimization_steps": self.optimization_steps,
+            "initial_mutual_information": self.initial_mutual_information,
+            "optimizer_backend": "numpy_random_search",
+        }
+
+
+class _NumpyEntropyQuerySelector:
+    def __init__(self, config: _SelectorConfig) -> None:
+        self.config = config
+
+    def select(
+        self,
+        posterior,
+        prior_covariance: np.ndarray,
+        num_options: int,
+        seed: int | None = None,
+    ) -> _NumpyEntropyQueryResult:
+        current_seed = self.config.seed if seed is None else int(seed)
+        random = np.random.default_rng(current_seed + 104729)
+        center = np.asarray(posterior.map_estimate, dtype=np.float64)
+        covariance = 0.5 * (
+            np.asarray(posterior.covariance, dtype=np.float64)
+            + np.asarray(posterior.covariance, dtype=np.float64).T
+        )
+        prior_factor = self._stable_cholesky(prior_covariance)
+        samples = random.multivariate_normal(
+            center,
+            covariance + 1e-6 * np.eye(len(center)),
+            size=int(self.config.posterior_mc_samples),
+        )
+
+        best: _NumpyEntropyQueryResult | None = None
+        total_trials = max(
+            1,
+            self.config.num_restarts * self.config.optimization_steps,
+        )
+        for trial in range(total_trials):
+            raw = random.normal(0.0, 1.0, size=(int(num_options), len(center)))
+            norms = np.maximum(np.linalg.norm(raw, axis=1, keepdims=True), 1.0)
+            raw = raw / norms
+            queries = center[None, :] + raw @ prior_factor.T
+            score, predictive, conditional = self._mutual_information(
+                samples,
+                queries,
+            )
+            if len(queries) > 1:
+                distances = [
+                    np.linalg.norm(queries[i] - queries[j])
+                    for i in range(len(queries))
+                    for j in range(i + 1, len(queries))
+                ]
+                minimum_distance = float(min(distances))
+            else:
+                minimum_distance = 0.0
+            result = _NumpyEntropyQueryResult(
+                query_points=queries.astype(np.float32),
+                mutual_information=float(score),
+                predictive_entropy=float(predictive),
+                expected_conditional_entropy=float(conditional),
+                min_pairwise_distance=minimum_distance,
+                max_mahalanobis_radius=float(np.linalg.norm(raw, axis=1).max()),
+                restart=trial // max(1, self.config.optimization_steps),
+                optimization_steps=int(self.config.optimization_steps),
+                initial_mutual_information=float(score),
+            )
+            if best is None or result.mutual_information > best.mutual_information:
+                best = result
+        if best is None:
+            raise RuntimeError("NumPy entropy query search did not produce a result")
+        return best
+
+    @staticmethod
+    def _stable_cholesky(covariance: np.ndarray) -> np.ndarray:
+        matrix = 0.5 * (
+            np.asarray(covariance, dtype=np.float64)
+            + np.asarray(covariance, dtype=np.float64).T
+        )
+        identity = np.eye(matrix.shape[0], dtype=np.float64)
+        for jitter in (1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3):
+            try:
+                return np.linalg.cholesky(matrix + jitter * identity)
+            except np.linalg.LinAlgError:
+                continue
+        eigenvalues, eigenvectors = np.linalg.eigh(matrix)
+        repaired = (
+            eigenvectors
+            @ np.diag(np.clip(eigenvalues, 1e-8, None))
+            @ eigenvectors.T
+        )
+        return np.linalg.cholesky(repaired + 1e-6 * identity)
+
+    @staticmethod
+    def _mutual_information(
+        samples: np.ndarray,
+        queries: np.ndarray,
+    ) -> tuple[float, float, float]:
+        squared_distances = np.sum(
+            (samples[:, None, :] - queries[None, :, :]) ** 2,
+            axis=-1,
+        )
+        logits = -0.5 * squared_distances
+        logits -= logits.max(axis=1, keepdims=True)
+        probabilities = np.exp(logits)
+        probabilities /= probabilities.sum(axis=1, keepdims=True)
+        epsilon = np.finfo(np.float64).eps
+        predictive = probabilities.mean(axis=0)
+        predictive_entropy = -np.sum(
+            predictive * np.log(np.maximum(predictive, epsilon))
+        )
+        conditional = -np.sum(
+            probabilities * np.log(np.maximum(probabilities, epsilon)),
+            axis=1,
+        ).mean()
+        return (
+            float(predictive_entropy - conditional),
+            float(predictive_entropy),
+            float(conditional),
+        )
 
 
 class EntropyQueryStrategy:
@@ -36,8 +192,10 @@ class EntropyQueryStrategy:
     ) -> None:
         self.generator = generator
         self.prior = prior
-        self.selector = EntropyQuerySelector(
-            EntropyQueryConfig(
+        config_class = EntropyQueryConfig or _SelectorConfig
+        selector_class = EntropyQuerySelector or _NumpyEntropyQuerySelector
+        self.selector = selector_class(
+            config_class(
                 posterior_mc_samples=int(parameters["posterior_mc_samples"]),
                 num_restarts=int(parameters["num_restarts"]),
                 optimization_steps=int(parameters["optimization_steps"]),

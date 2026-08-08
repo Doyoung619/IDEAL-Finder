@@ -108,6 +108,23 @@ bash scripts/run_dev.sh
 
 웹 앱은 `http://127.0.0.1:8000`에서 실행됩니다. 각 $M\in\{2,4,8,16\}$ block은 12라운드이며 라운드 소요 시간은 참가자 화면에 표시하지 않습니다. 선택한 이미지는 preference 1, 나머지는 0으로 기록됩니다.
 
+## Vercel Demo Deployment
+
+Vercel 무료 플랜 배포는 실제 StyleGAN2-ADA/CLIP checkpoint를 서버리스 함수에 올리는 연구 실행 경로가 아니라, 앱 흐름 검증용 demo generator를 대상으로 합니다. Vercel에서는 `index.py`가 FastAPI 앱을 export하고, `requirements-vercel.txt`만 설치해 함수 번들에서 `torch`, `open_clip_torch`, checkpoint, run output을 제외합니다.
+
+필수 환경변수는 다음과 같습니다.
+
+```bash
+IDEAL_SECRET_KEY="long-random-secret"
+IDEAL_ADMIN_PASSWORD="separate-admin-password"
+IDEAL_DATABASE_URL="postgresql+psycopg://USER:PASSWORD@HOST:PORT/DATABASE?sslmode=require"
+IDEAL_DEMO=1
+IDEAL_ARTIFACT_STORAGE=database
+IDEAL_DB_POOL=serverless
+```
+
+Vercel에서는 generated image/latent/state artifact를 외부 DB에 함께 저장하고 요청 시 `/tmp` scratch directory로 복원합니다. `/admin`은 `IDEAL_ADMIN_PASSWORD`가 있으면 HTTP Basic 사용자명 `admin`으로 보호되며, Vercel에서 password가 없으면 노출되지 않습니다. 로컬 연구 실행에서는 기본값 그대로 filesystem artifact를 사용합니다.
+
 ## Entropy Demo
 
 실제 StyleGAN decoder:

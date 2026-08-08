@@ -8,6 +8,9 @@ app:
 database:
   url: "sqlite:///data/ideal_type_detector.sqlite3"
 
+storage:
+  persist_artifacts_in_db: false
+
 paths:
   data_dir: "data"
   cache_dir: "cache"

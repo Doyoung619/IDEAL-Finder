@@ -46,11 +46,6 @@ def create_app(config: ConfigNode | None = None) -> FastAPI:
         StaticFiles(directory=str(PROJECT_ROOT / "app" / "static")),
         name="static",
     )
-    application.mount(
-        "/generated",
-        StaticFiles(directory=settings.paths.cache_dir),
-        name="generated",
-    )
     application.include_router(participant.router)
     application.include_router(admin.router)
     return application

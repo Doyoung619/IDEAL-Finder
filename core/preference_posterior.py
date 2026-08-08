@@ -3,7 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
-import torch
+
+try:
+    import torch
+except ImportError:  # pragma: no cover - exercised in Vercel slim installs.
+    torch = None
 
 from core.conditional_prior import ConditionalPCAPrior
 
@@ -112,10 +116,13 @@ class GaussianPreferencePosterior:
         self,
         num_samples: int,
         seed: int = 0,
-        device: str | torch.device = "cpu",
-        dtype: torch.dtype = torch.float32,
-    ) -> torch.Tensor:
+        device: str | object = "cpu",
+        dtype=None,
+    ):
         """Draw reparameterized samples from the current Gaussian approximation."""
+        if torch is None:
+            raise RuntimeError("Torch is required for posterior sampling")
+        dtype = dtype or torch.float32
         if num_samples < 1:
             raise ValueError("num_samples must be positive")
         target_device = torch.device(device)

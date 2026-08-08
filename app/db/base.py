@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Generator
 
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 
 class Base(DeclarativeBase):
@@ -20,12 +22,12 @@ def init_database(database_url: str) -> Engine:
     if _engine is not None:
         return _engine
 
-    _engine = create_engine(
-        database_url,
-        connect_args={"check_same_thread": False}
-        if database_url.startswith("sqlite")
-        else {},
-    )
+    engine_options = {"pool_pre_ping": True}
+    if database_url.startswith("sqlite"):
+        engine_options["connect_args"] = {"check_same_thread": False}
+    elif _serverless_pooling_enabled():
+        engine_options["poolclass"] = NullPool
+    _engine = create_engine(database_url, **engine_options)
     if database_url.startswith("sqlite"):
         event.listen(_engine, "connect", _enable_sqlite_foreign_keys)
 
@@ -75,6 +77,50 @@ def _migrate_sqlite_schema(engine: Engine) -> None:
                     "ADD COLUMN strategy_parameters_json TEXT NOT NULL DEFAULT '{}'"
                 )
             )
+    _add_sqlite_column_if_missing(
+        engine,
+        "experiment_blocks",
+        "mu_data",
+        "ALTER TABLE experiment_blocks ADD COLUMN mu_data BLOB",
+    )
+    _add_sqlite_column_if_missing(
+        engine,
+        "experiment_blocks",
+        "strategy_state_data",
+        "ALTER TABLE experiment_blocks ADD COLUMN strategy_state_data BLOB",
+    )
+    _add_sqlite_column_if_missing(
+        engine,
+        "latent_images",
+        "latent_data",
+        "ALTER TABLE latent_images ADD COLUMN latent_data BLOB",
+    )
+    _add_sqlite_column_if_missing(
+        engine,
+        "latent_images",
+        "image_data",
+        "ALTER TABLE latent_images ADD COLUMN image_data BLOB",
+    )
+
+
+def _add_sqlite_column_if_missing(
+    engine: Engine,
+    table_name: str,
+    column_name: str,
+    statement: str,
+) -> None:
+    columns = {
+        column["name"] for column in inspect(engine).get_columns(table_name)
+    }
+    if column_name in columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(text(statement))
+
+
+def _serverless_pooling_enabled() -> bool:
+    value = os.getenv("IDEAL_DB_POOL", "").lower()
+    return value == "serverless" or os.getenv("VERCEL") == "1"
 
 
 def get_session() -> Session:

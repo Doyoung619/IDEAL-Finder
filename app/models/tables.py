@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -64,8 +73,10 @@ class ExperimentBlock(Base):
     initial_state_id: Mapped[str] = mapped_column(String(64))
     initial_seed: Mapped[int] = mapped_column(Integer)
     mu_path: Mapped[str] = mapped_column(Text)
+    mu_data: Mapped[bytes | None] = mapped_column(LargeBinary)
     sigma: Mapped[float] = mapped_column(Float)
     strategy_state_path: Mapped[str | None] = mapped_column(Text)
+    strategy_state_data: Mapped[bytes | None] = mapped_column(LargeBinary)
     strategy_parameters_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -87,7 +98,9 @@ class LatentImage(Base):
     stage_type: Mapped[str] = mapped_column(String(32), index=True)
     batch_id: Mapped[str | None] = mapped_column(String(64), index=True)
     latent_path: Mapped[str] = mapped_column(Text)
+    latent_data: Mapped[bytes | None] = mapped_column(LargeBinary)
     image_path: Mapped[str] = mapped_column(Text)
+    image_data: Mapped[bytes | None] = mapped_column(LargeBinary)
     generator_type: Mapped[str] = mapped_column(String(64))
     generator_seed: Mapped[int] = mapped_column(Integer)
     gender_target: Mapped[str | None] = mapped_column(String(32))

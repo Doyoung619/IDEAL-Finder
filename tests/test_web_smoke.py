@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -66,6 +68,11 @@ def test_demo_flow_reaches_first_generated_round(tmp_path):
         round_page = client.get(f"/experiment1/round?block={block_index}")
         assert round_page.status_code == 200
         assert "가장 마음에 드는 얼굴을 선택하세요" in round_page.text
+        image_match = re.search(r'<img src="([^"]+)"', round_page.text)
+        assert image_match is not None
+        image_response = client.get(image_match.group(1))
+        assert image_response.status_code == 200
+        assert image_response.headers["content-type"] == "image/png"
 
     with get_session() as db:
         participant = db.scalar(select(Participant))

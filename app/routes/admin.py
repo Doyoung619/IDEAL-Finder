@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
+import secrets
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import Response
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -13,7 +16,30 @@ from app.routes.helpers import template_context
 from app.services.export_service import build_csv_export_zip
 
 
-router = APIRouter(prefix="/admin")
+security = HTTPBasic(auto_error=False)
+
+
+def require_admin(
+    credentials: HTTPBasicCredentials | None = Depends(security),
+) -> None:
+    password = os.getenv("IDEAL_ADMIN_PASSWORD")
+    if not password:
+        if os.getenv("VERCEL") == "1" or os.getenv("IDEAL_SERVERLESS") == "1":
+            raise HTTPException(status_code=404)
+        return
+    authorized = (
+        credentials is not None
+        and secrets.compare_digest(credentials.username, "admin")
+        and secrets.compare_digest(credentials.password, password)
+    )
+    if not authorized:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
+
+router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])
 
 
 @router.get("")
@@ -60,4 +86,3 @@ def export_zip(db: Session = Depends(get_db)):
             )
         },
     )
-
