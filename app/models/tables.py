@@ -181,3 +181,92 @@ class FinalSurvey(Base):
     q4: Mapped[int] = mapped_column(Integer)
     free_text: Mapped[str | None] = mapped_column(Text)
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class PersonaProfile(Base):
+    __tablename__ = "persona_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    participant_id: Mapped[str] = mapped_column(
+        ForeignKey("participants.participant_id"), unique=True, index=True
+    )
+    schema_version: Mapped[str] = mapped_column(String(32))
+    target_gender: Mapped[str] = mapped_column(String(16))
+    fixed_race: Mapped[str] = mapped_column(String(32))
+    fixed_age_range: Mapped[str] = mapped_column(String(32))
+    responses_json: Mapped[str] = mapped_column(Text)
+    priorities_json: Mapped[str] = mapped_column(Text)
+    korean_summary: Mapped[str] = mapped_column(Text)
+    full_prompt_en: Mapped[str] = mapped_column(Text)
+    prompt_bundle_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class PersonaCandidateBatch(Base):
+    __tablename__ = "persona_candidate_batches"
+
+    batch_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    participant_id: Mapped[str] = mapped_column(
+        ForeignKey("participants.participant_id"), index=True
+    )
+    page_index: Mapped[int] = mapped_column(Integer)
+    pool_version: Mapped[str] = mapped_column(String(128))
+    shown_pool_ids_json: Mapped[str] = mapped_column(Text)
+    shown_image_ids_json: Mapped[str] = mapped_column(Text)
+    semantic_scores_json: Mapped[str] = mapped_column(Text)
+    semantic_ranks_json: Mapped[str] = mapped_column(Text)
+    mmr_scores_json: Mapped[str] = mapped_column(Text)
+    display_order_json: Mapped[str] = mapped_column(Text)
+    action: Mapped[str | None] = mapped_column(String(32))
+    selected_pool_id: Mapped[str | None] = mapped_column(String(128))
+    selected_image_id: Mapped[str | None] = mapped_column(
+        ForeignKey("latent_images.image_id")
+    )
+    reaction_time_sec: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PersonaInitialization(Base):
+    __tablename__ = "persona_initializations"
+
+    participant_id: Mapped[str] = mapped_column(
+        ForeignKey("participants.participant_id"), primary_key=True
+    )
+    persona_profile_id: Mapped[int] = mapped_column(ForeignKey("persona_profiles.id"))
+    candidate_batch_id: Mapped[str] = mapped_column(
+        ForeignKey("persona_candidate_batches.batch_id")
+    )
+    selected_pool_id: Mapped[str] = mapped_column(String(128))
+    selected_image_id: Mapped[str] = mapped_column(ForeignKey("latent_images.image_id"))
+    selected_rank: Mapped[int] = mapped_column(Integer)
+    semantic_score: Mapped[float] = mapped_column(Float)
+    theta_path: Mapped[str] = mapped_column(Text)
+    w_path: Mapped[str] = mapped_column(Text)
+    initial_rating_1_10: Mapped[int] = mapped_column(Integer)
+    selection_confidence_1_7: Mapped[int] = mapped_column(Integer)
+    pool_version: Mapped[str] = mapped_column(String(128))
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class FinalRefinementEvaluation(Base):
+    __tablename__ = "final_refinement_evaluations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    participant_id: Mapped[str] = mapped_column(
+        ForeignKey("participants.participant_id"), unique=True, index=True
+    )
+    initial_image_id: Mapped[str] = mapped_column(ForeignKey("latent_images.image_id"))
+    final_map_image_id: Mapped[str] = mapped_column(ForeignKey("latent_images.image_id"))
+    last_winner_image_id: Mapped[str | None] = mapped_column(ForeignKey("latent_images.image_id"))
+    display_order_json: Mapped[str] = mapped_column(Text)
+    preferred_image_id: Mapped[str] = mapped_column(ForeignKey("latent_images.image_id"))
+    initial_rating_1_10: Mapped[int] = mapped_column(Integer)
+    final_rating_1_10: Mapped[int] = mapped_column(Integer)
+    perceived_improvement_1_7: Mapped[int] = mapped_column(Integer)
+    final_match_1_10: Mapped[int] = mapped_column(Integer)
+    reaction_time_sec: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

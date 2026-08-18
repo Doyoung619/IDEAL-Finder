@@ -15,6 +15,8 @@ from core.pca_utils import LatentProjector
 from core.portrait_control import PortraitQualityController
 from core.query_strategy import create_query_strategy
 from core.conditional_prior import ConditionalPCAPrior, DemographicCondition
+from core.persona_pool import PersonaPool
+from core.persona_retrieval import PersonaRetrievalConfig, PersonaRetriever
 
 
 class ExperimentRuntime:
@@ -35,6 +37,11 @@ class ExperimentRuntime:
             pretrained=config.clip.pretrained,
             device=config.clip.device,
             batch_size=config.clip.batch_size,
+            require_real=(
+                bool(config.persona.require_real_clip)
+                and config.generator.mode != "demo"
+            ),
+            allow_mock=config.generator.mode == "demo",
         )
         self.gender_controller = GenderController(
             clip_ranker=self.clip_ranker,
@@ -55,6 +62,7 @@ class ExperimentRuntime:
             minimum_quality=config.filters.minimum_quality
         )
         self._conditional_priors = {}
+        self._persona_pools = {}
 
     def ensure_ready(self) -> None:
         self.projector.ensure_fitted(
@@ -64,8 +72,9 @@ class ExperimentRuntime:
         )
 
     def strategy_for(self, mode: str, parameters: dict):
-        if self.config.query.algorithm != "entropy" or mode != "entropy":
-            raise ValueError("Only the entropy query algorithm is currently supported.")
+        allowed = set(self.config.experiment.algorithm_order)
+        if mode not in allowed:
+            raise ValueError(f"Unsupported query algorithm: {mode}")
         conditional_prior = self.conditional_prior(parameters)
         return create_query_strategy(
             self.config,
@@ -132,3 +141,100 @@ class ExperimentRuntime:
                 )
             self._conditional_priors[prior_path] = prior
         return self._conditional_priors[prior_path]
+
+    def persona_pool(self, gender: str) -> PersonaPool:
+        if gender not in {"female", "male"}:
+            raise ValueError("Persona pool gender must be female or male")
+        if gender in self._persona_pools:
+            return self._persona_pools[gender]
+        configured = (
+            self.config.persona.female_pool
+            if gender == "female"
+            else self.config.persona.male_pool
+        )
+        if self.config.generator.mode == "demo":
+            root = Path(self.config.paths.cache_dir) / "demo_persona_pools" / gender
+            if not (root / "pool.npz").exists():
+                self._build_demo_persona_pool(root, gender)
+            minimum_size = int(self.config.persona_pool.minimum_usable_size)
+        else:
+            root = Path(configured)
+            minimum_size = int(self.config.persona_pool.minimum_usable_size)
+        pool = PersonaPool.load(root, minimum_size=minimum_size)
+        if self.config.generator.mode != "demo":
+            pool.validate_thresholds(
+                gender_threshold=float(self.config.persona_pool.gender_threshold),
+                age_20_29_threshold=float(self.config.persona_pool.age_20_29_threshold),
+                minimum_quality=float(self.config.persona_pool.minimum_quality),
+            )
+        if pool.theta_dimension != self.conditional_prior(
+            {"condition_gender": gender, "condition_races": []}
+        ).dimension:
+            raise ValueError("Persona pool theta dimension does not match its prior")
+        if pool.metadata.get("gender") not in {None, gender}:
+            raise ValueError("Persona pool gender metadata does not match")
+        self._persona_pools[gender] = pool
+        return pool
+
+    def persona_retriever(self) -> PersonaRetriever:
+        weights = self.config.persona.semantic_weights
+        return PersonaRetriever(
+            self.clip_ranker,
+            PersonaRetrievalConfig(
+                candidate_count=int(self.config.persona.candidate_count),
+                shortlist_size=int(self.config.persona.shortlist_size),
+                mmr_lambda=float(self.config.persona.mmr_lambda),
+                max_pages=int(self.config.persona.max_candidate_pages),
+                base_weight=float(weights.base),
+                full_weight=float(weights.full),
+                categories_weight=float(weights.categories),
+            ),
+        )
+
+    def _build_demo_persona_pool(self, root: Path, gender: str) -> None:
+        prior = self.conditional_prior(
+            {"condition_gender": gender, "condition_races": []}
+        )
+        size = max(
+            int(self.config.persona_pool.target_size),
+            int(self.config.persona.candidate_count)
+            * int(self.config.persona.max_candidate_pages),
+        )
+        gender_offset = 0 if gender == "female" else 100_000
+        seed = int(self.config.experiment.seed) + gender_offset
+        random = np.random.default_rng(seed)
+        theta = prior.sample_theta(size, generator=random).astype(np.float32)
+        w = np.asarray(prior.theta_to_w(theta), dtype=np.float32)
+        images = self.generator.decode(w)
+        root.mkdir(parents=True, exist_ok=True)
+        image_paths = []
+        for index, image in enumerate(images):
+            relative = f"images/{index:06d}.png"
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            image.save(path, format="PNG", optimize=True)
+            image_paths.append(relative)
+        embeddings = self.clip_ranker.encode_images(images)
+        pool = PersonaPool(
+            root=root,
+            pool_ids=np.asarray(
+                [f"{gender}-demo-v1-{index:06d}" for index in range(size)]
+            ),
+            theta=theta,
+            w=w,
+            clip_image_embedding=embeddings,
+            quality_score=np.full(size, 1.0, dtype=np.float32),
+            gender_probability=np.full(size, 1.0, dtype=np.float32),
+            age_20_29_probability=np.full(size, 1.0, dtype=np.float32),
+            generator_seed=np.arange(seed, seed + size, dtype=np.int64),
+            image_paths=tuple(image_paths),
+            metadata={
+                "pool_version": f"{gender}-demo-v1",
+                "gender": gender,
+                "fixed_race": "unrestricted",
+                "fixed_age": "20_29",
+                "clip_backend": self.clip_ranker.backend,
+                "scientific_result": False,
+            },
+        )
+        pool.save()

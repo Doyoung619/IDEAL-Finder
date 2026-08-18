@@ -433,6 +433,17 @@ legend { margin-bottom: 13px; font-weight: 800; line-height: 1.45; }
 .progress-copy { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
 
 .profile-categories { display: grid; gap: 14px; margin-top: 32px; }
+.persona-sheet { max-width: 1080px; }
+.priority-panel { padding: 24px; background: #eef1f5; border-radius: 16px; }
+.priority-panel small { display: block; margin-top: 14px; color: var(--muted); }
+.priority-chip[hidden] { display: none; }
+.persona-summary { margin: 0 0 24px; padding: 16px 19px; display: grid; gap: 6px; background: white; border: 1px solid var(--line); border-radius: 14px; }
+.persona-summary span { color: var(--muted); font-size: 13px; line-height: 1.65; }
+.persona-summary.left { text-align: left; }
+.persona-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.candidate-actions { margin-top: 28px; display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
+.final-face-grid { max-width: 930px; margin: 0 auto; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.final-rating-panel { max-width: 980px; grid-template-columns: 1fr 180px; }
 .chip-category { padding: 22px; background: #f7f7f4; border-radius: 16px; }
 .chip-category legend { width: 100%; display: flex; align-items: center; gap: 10px; }
 .chip-category legend span { color: var(--accent-dark); font-size: 11px; }
@@ -479,6 +490,10 @@ textarea {
   max-width: 860px; margin: 0 auto 18px; padding: 14px 18px;
   color: #8c2e29; background: #ffe4e1; border: 1px solid #f5b9b3; border-radius: 12px;
 }
+.readiness-grid { margin: 0 0 22px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.readiness-card { padding: 16px; display: grid; gap: 6px; background: white; border: 1px solid var(--line); border-radius: 14px; }
+.readiness-card span, .readiness-card small { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.readiness-card strong { font-size: 13px; }
 
 .table-wrap { overflow-x: auto; background: white; border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); }
 table { width: 100%; border-collapse: collapse; }

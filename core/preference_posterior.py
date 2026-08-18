@@ -277,3 +277,193 @@ class GaussianPreferencePosterior:
         if len(values) < 2 or not np.isfinite(values).all():
             raise ValueError("queries must contain at least two finite rows")
         return values
+
+
+@dataclass
+class ParticleMixturePreferencePosterior:
+    """Weighted-particle posterior initialized from an exact two-Gaussian mixture."""
+
+    particles: np.ndarray
+    weights: np.ndarray
+    component_is_global: np.ndarray
+    prior_mean: np.ndarray
+    prior_covariance: np.ndarray
+    beta: float = 1.0
+    metric: np.ndarray | None = None
+    history: list[dict] = field(default_factory=list)
+    resample_threshold: float = 0.12
+    rejuvenation_scale: float = 0.05
+
+    def __post_init__(self) -> None:
+        self.particles = np.asarray(self.particles, dtype=np.float64)
+        self.weights = np.asarray(self.weights, dtype=np.float64)
+        self.component_is_global = np.asarray(self.component_is_global, dtype=bool)
+        self.prior_mean = np.asarray(self.prior_mean, dtype=np.float64)
+        self.prior_covariance = np.asarray(self.prior_covariance, dtype=np.float64)
+        if self.particles.ndim != 2 or len(self.particles) < 2:
+            raise ValueError("particles must have shape (N, d) with N >= 2")
+        count, dimension = self.particles.shape
+        if self.weights.shape != (count,) or self.component_is_global.shape != (count,):
+            raise ValueError("particle weights/components have invalid shapes")
+        if self.prior_mean.shape != (dimension,) or self.prior_covariance.shape != (dimension, dimension):
+            raise ValueError("mixture prior moments have invalid shapes")
+        if self.beta <= 0 or np.any(self.weights < 0):
+            raise ValueError("beta must be positive and weights non-negative")
+        if not all(np.isfinite(value).all() for value in (self.particles, self.weights, self.prior_mean, self.prior_covariance)):
+            raise ValueError("particle posterior contains NaN or Inf")
+        total = float(self.weights.sum())
+        if total <= 0:
+            raise ValueError("particle weights must have positive mass")
+        self.weights /= total
+        self.metric = (
+            np.eye(dimension, dtype=np.float64)
+            if self.metric is None
+            else np.asarray(self.metric, dtype=np.float64)
+        )
+        if self.metric.shape != (dimension, dimension):
+            raise ValueError("metric has an invalid shape")
+        self._refresh_moments()
+        self.last_resampled = False
+        self.ess_before_resample = self.effective_sample_size
+
+    @classmethod
+    def from_gaussian_mixture(
+        cls,
+        local_mean: np.ndarray,
+        local_covariance: np.ndarray,
+        global_mean: np.ndarray,
+        global_covariance: np.ndarray,
+        global_weight: float,
+        particle_count: int,
+        seed: int,
+        beta: float = 1.0,
+        metric: np.ndarray | None = None,
+    ) -> "ParticleMixturePreferencePosterior":
+        if not 0.0 < global_weight < 1.0:
+            raise ValueError("global_weight must be strictly between zero and one")
+        if particle_count < 512:
+            raise ValueError("particle_count must be at least 512")
+        local_mean = np.asarray(local_mean, dtype=np.float64)
+        global_mean = np.asarray(global_mean, dtype=np.float64)
+        local_covariance = np.asarray(local_covariance, dtype=np.float64)
+        global_covariance = np.asarray(global_covariance, dtype=np.float64)
+        random = np.random.default_rng(seed)
+        global_count = int(round(particle_count * global_weight))
+        local_count = particle_count - global_count
+        local = random.multivariate_normal(local_mean, local_covariance, size=local_count)
+        global_values = random.multivariate_normal(global_mean, global_covariance, size=global_count)
+        particles = np.vstack((local, global_values))
+        components = np.concatenate(
+            (np.zeros(local_count, dtype=bool), np.ones(global_count, dtype=bool))
+        )
+        order = random.permutation(particle_count)
+        particles = particles[order]
+        components = components[order]
+        weights = np.where(
+            components,
+            global_weight / global_count,
+            (1.0 - global_weight) / local_count,
+        ).astype(np.float64)
+        mixture_mean = (1.0 - global_weight) * local_mean + global_weight * global_mean
+        local_delta = local_mean - mixture_mean
+        global_delta = global_mean - mixture_mean
+        mixture_covariance = (
+            (1.0 - global_weight)
+            * (local_covariance + np.outer(local_delta, local_delta))
+            + global_weight
+            * (global_covariance + np.outer(global_delta, global_delta))
+        )
+        return cls(
+            particles=particles,
+            weights=weights,
+            component_is_global=components,
+            prior_mean=mixture_mean,
+            prior_covariance=mixture_covariance,
+            beta=beta,
+            metric=metric,
+        )
+
+    @property
+    def mean(self) -> np.ndarray:
+        return self.map_estimate
+
+    @property
+    def global_mass(self) -> float:
+        return float(self.weights[self.component_is_global].sum())
+
+    @property
+    def effective_sample_size(self) -> float:
+        return float(1.0 / np.square(self.weights).sum())
+
+    def sample(
+        self,
+        num_samples: int,
+        seed: int = 0,
+        device: str | torch.device = "cpu",
+        dtype: torch.dtype = torch.float32,
+    ) -> torch.Tensor:
+        if num_samples < 1:
+            raise ValueError("num_samples must be positive")
+        random = np.random.default_rng(seed)
+        indices = random.choice(len(self.particles), size=num_samples, replace=True, p=self.weights)
+        return torch.as_tensor(self.particles[indices], dtype=dtype, device=torch.device(device))
+
+    def update(self, queries: np.ndarray, winner_index: int) -> "ParticleMixturePreferencePosterior":
+        values = self._validate_queries(queries)
+        if not 0 <= int(winner_index) < len(values):
+            raise ValueError("winner_index is outside the query set")
+        linear = self.particles @ self.metric @ values.T
+        quadratic = np.einsum("ni,ij,nj->n", values, self.metric, values)
+        logits = self.beta * (2.0 * linear - quadratic[None, :])
+        logits -= logits.max(axis=1, keepdims=True)
+        likelihood = np.exp(logits)
+        likelihood /= likelihood.sum(axis=1, keepdims=True)
+        log_weights = np.log(np.clip(self.weights, 1e-300, None))
+        log_weights += np.log(np.clip(likelihood[:, int(winner_index)], 1e-300, None))
+        log_weights -= float(log_weights.max())
+        self.weights = np.exp(log_weights)
+        self.weights /= float(self.weights.sum())
+        self.history.append({"queries": values.copy(), "winner_index": int(winner_index)})
+        self._refresh_moments()
+        self.ess_before_resample = self.effective_sample_size
+        self.last_resampled = False
+        if self.effective_sample_size < self.resample_threshold * len(self.particles):
+            self._regularized_resample()
+        return self
+
+    def _regularized_resample(self) -> None:
+        """Deterministic Liu-West resampling prevents late-round particle collapse."""
+        count, dimension = self.particles.shape
+        random = np.random.default_rng(104729 * len(self.history) + dimension)
+        ancestors = random.choice(count, size=count, replace=True, p=self.weights)
+        selected = self.particles[ancestors]
+        selected_components = self.component_is_global[ancestors]
+        h = float(self.rejuvenation_scale)
+        shrinkage = float(np.sqrt(max(1.0 - h * h, 0.0)))
+        covariance = 0.5 * (self.covariance + self.covariance.T)
+        eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+        factor = eigenvectors @ np.diag(np.sqrt(np.clip(eigenvalues, 1e-10, None)))
+        noise = random.normal(size=(count, dimension)) @ factor.T
+        self.particles = (
+            shrinkage * selected
+            + (1.0 - shrinkage) * self.map_estimate[None, :]
+            + h * noise
+        )
+        self.component_is_global = selected_components
+        self.weights = np.full(count, 1.0 / count, dtype=np.float64)
+        self._refresh_moments()
+        self.last_resampled = True
+
+    def _refresh_moments(self) -> None:
+        self.map_estimate = self.weights @ self.particles
+        centered = self.particles - self.map_estimate[None, :]
+        covariance = centered.T @ (self.weights[:, None] * centered)
+        self.covariance = 0.5 * (covariance + covariance.T)
+
+    def _validate_queries(self, queries: np.ndarray) -> np.ndarray:
+        values = np.asarray(queries, dtype=np.float64)
+        if values.ndim != 2 or values.shape[1] != self.particles.shape[1]:
+            raise ValueError(f"queries must have shape (M, {self.particles.shape[1]})")
+        if len(values) < 2 or not np.isfinite(values).all():
+            raise ValueError("queries must contain at least two finite rows")
+        return values

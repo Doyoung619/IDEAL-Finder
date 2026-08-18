@@ -1,0 +1,76 @@
+experiment:
+  m_list: [8, 4, 2]
+  algorithm_order: ["entropy", "rc_mlq"]
+  rounds_per_m: 12
+  answer_key_faces: 0
+  recommendation_conditions: []
+
+generator:
+  mode: "stylegan3"
+  device: "cuda:0"
+  output_resolution: 256
+  batch_size: 8
+  noise_mode: "const"
+  stylegan_repo: "/data1/doyoung/Ideal/third_party/stylegan3"
+  network_path: "/data1/doyoung/Ideal/checkpoints/stylegan3-r-ffhqu-256x256.pkl"
+
+conditional_prior:
+  artifact_path: "artifacts/priors/{gender}_20_29_d12.npz"
+  latent_space: "w"
+  dimension: 12
+
+clip:
+  enabled: true
+  # The official OpenAI ViT-B/32 checkpoint was trained with QuickGELU.
+  model_name: "ViT-B-32-quickgelu"
+  pretrained: "openai"
+  device: "cuda:0"
+  batch_size: 64
+
+demographic:
+  classifier: "fairface_vit_triplet"
+  race_weights: "/data1/doyoung/Ideal/checkpoints/fairface_race"
+  gender_weights: "/data1/doyoung/Ideal/checkpoints/fairface_gender"
+  age_weights: "/data1/doyoung/Ideal/checkpoints/fairface_age"
+  devices: ["cuda:1", "cuda:2", "cuda:3"]
+  batch_size: 64
+  race_targets: []
+
+persona:
+  enabled: true
+  required: true
+  fixed_race: "unrestricted"
+  fixed_age_range: "20_29"
+  female_pool: "artifacts/persona_pools/female_20_29_d12"
+  male_pool: "artifacts/persona_pools/male_20_29_d12"
+  prior_covariance_scale: 0.35
+  global_mixture_weight: 0.45
+  global_covariance_scale: 1.0
+  mixture_particle_count: 8192
+
+persona_pool:
+  target_size: 1000
+  minimum_usable_size: 1000
+  max_generated: 2000
+  batch_size: 64
+  face_detector_path: "/data1/doyoung/Ideal/checkpoints/face_detection_yunet_2023mar.onnx"
+  face_confidence_threshold: 0.65
+
+search:
+  version: "rc_mlq_v4_randomized_entropy_spread14"
+
+query:
+  entropy_output_spread_scale: 1.4
+  beta: 1.0
+  adaptive_beta_enabled: true
+  beta_min: 0.35
+  beta_max: 2.5
+  beta_smoothing: 0.30
+  rc_resolution_min: 0.2
+  rc_resolution_max: 6.0
+  rc_resolution_steps: 120
+  rc_posterior_samples: 4096
+
+evaluation:
+  answer_key_enabled: false
+  final_refinement_enabled: true

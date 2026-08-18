@@ -192,6 +192,154 @@ class StyleGAN2ADAGenerator(FaceGenerator):
         return results
 
 
+class StyleGAN3Generator(FaceGenerator):
+    """Frozen NVIDIA StyleGAN3-R FFHQ-U generator with a broadcast-W API."""
+
+    generator_name = "stylegan3_r_ffhqu"
+
+    def __init__(
+        self,
+        repo_path: str,
+        network_path: str,
+        device: str = "auto",
+        output_resolution: int = 256,
+        batch_size: int = 8,
+        noise_mode: str = "const",
+        torch_extensions_dir: str | None = None,
+    ) -> None:
+        self.repo_path = Path(repo_path)
+        self.network_path = Path(network_path)
+        self.generator_name = f"stylegan3_{self.network_path.stem}"
+        self.device = resolve_device(device)
+        self.output_resolution = int(output_resolution)
+        self.batch_size = int(batch_size)
+        self.noise_mode = str(noise_mode)
+        self.torch_extensions_dir = (
+            Path(torch_extensions_dir) if torch_extensions_dir else None
+        )
+        self._network = None
+
+    @property
+    def network(self):
+        if self._network is None:
+            if not self.repo_path.exists():
+                raise FileNotFoundError(f"StyleGAN3 source not found: {self.repo_path}")
+            if not self.network_path.exists():
+                raise FileNotFoundError(
+                    f"StyleGAN3 checkpoint not found: {self.network_path}"
+                )
+            if self.torch_extensions_dir is not None:
+                self.torch_extensions_dir.mkdir(parents=True, exist_ok=True)
+                os.environ.setdefault(
+                    "TORCH_EXTENSIONS_DIR", str(self.torch_extensions_dir)
+                )
+            executable_bin = Path(sys.prefix) / (
+                "Scripts" if os.name == "nt" else "bin"
+            )
+            if (executable_bin / "ninja").exists() and str(
+                executable_bin
+            ) not in os.environ.get("PATH", "").split(os.pathsep):
+                os.environ["PATH"] = (
+                    str(executable_bin)
+                    + os.pathsep
+                    + os.environ.get("PATH", "")
+                )
+            if not os.environ.get("TORCH_CUDA_ARCH_LIST"):
+                os.environ["TORCH_CUDA_ARCH_LIST"] = "8.9"
+            sys.path.insert(0, str(self.repo_path))
+            try:
+                import dnnlib
+                import legacy
+
+                with dnnlib.util.open_url(str(self.network_path)) as handle:
+                    self._network = legacy.load_network_pkl(handle)["G_ema"]
+                self._network = (
+                    self._network.eval().requires_grad_(False).to(self.device)
+                )
+            finally:
+                if sys.path[0] == str(self.repo_path):
+                    sys.path.pop(0)
+        return self._network
+
+    @property
+    def latent_dim(self) -> int:
+        return int(self.network.w_dim)
+
+    @property
+    def z_dim(self) -> int:
+        return int(self.network.z_dim)
+
+    @property
+    def w_dim(self) -> int:
+        return int(self.network.w_dim)
+
+    def map_z_to_w(self, z: np.ndarray | torch.Tensor) -> np.ndarray:
+        values = torch.as_tensor(z, dtype=torch.float32, device=self.device)
+        if values.ndim != 2 or values.shape[1] != self.z_dim:
+            raise ValueError(f"z must have shape (N, {self.z_dim})")
+        if not torch.isfinite(values).all():
+            raise ValueError("z contains NaN or Inf")
+        condition = torch.zeros(
+            (values.shape[0], self.network.c_dim), device=self.device
+        )
+        with torch.inference_mode():
+            w_plus = self.network.mapping(values, condition)
+        if w_plus.shape[1] > 1 and not torch.allclose(
+            w_plus[:, 1:], w_plus[:, :-1]
+        ):
+            raise RuntimeError(
+                "The configured StyleGAN3 checkpoint does not use broadcast W"
+            )
+        return w_plus[:, 0].float().cpu().numpy().astype(np.float32)
+
+    def synthesize_w(self, w: np.ndarray | torch.Tensor) -> torch.Tensor:
+        values = torch.as_tensor(w, dtype=torch.float32, device=self.device)
+        if values.ndim == 1:
+            values = values.unsqueeze(0)
+        if values.ndim != 2 or values.shape[1] != self.w_dim:
+            raise ValueError(f"w must have shape (N, {self.w_dim})")
+        if not torch.isfinite(values).all():
+            raise ValueError("w contains NaN or Inf")
+        batches: list[torch.Tensor] = []
+        for start in range(0, len(values), self.batch_size):
+            batch = values[start : start + self.batch_size]
+            w_plus = batch.unsqueeze(1).repeat(1, self.network.num_ws, 1)
+            with torch.inference_mode():
+                images = self.network.synthesis(
+                    w_plus,
+                    noise_mode=self.noise_mode,
+                    force_fp32=True,
+                )
+            batches.append(((images.clamp(-1, 1) + 1.0) / 2.0).cpu())
+        if not batches:
+            return torch.empty(
+                (0, 3, self.output_resolution, self.output_resolution)
+            )
+        return torch.cat(batches, dim=0)
+
+    def generate_from_theta(self, theta: np.ndarray, prior) -> torch.Tensor:
+        return self.synthesize_w(prior.theta_to_w(theta))
+
+    def sample_prior(self, count: int, seed: int) -> np.ndarray:
+        random = np.random.default_rng(seed)
+        z = random.standard_normal((count, self.z_dim)).astype(np.float32)
+        return self.map_z_to_w(z)
+
+    def decode(self, latents: np.ndarray) -> list[Image.Image]:
+        tensors = self.synthesize_w(np.atleast_2d(latents))
+        arrays = tensors.mul(255).round().to(torch.uint8).permute(0, 2, 3, 1)
+        results: list[Image.Image] = []
+        for array in arrays.numpy():
+            image = Image.fromarray(array, "RGB")
+            if image.size != (self.output_resolution, self.output_resolution):
+                image = image.resize(
+                    (self.output_resolution, self.output_resolution),
+                    Image.Resampling.LANCZOS,
+                )
+            results.append(image)
+        return results
+
+
 class DemoFaceGenerator(FaceGenerator):
     generator_name = "demo_torch_portrait_decoder"
 
@@ -413,6 +561,18 @@ def create_generator(config) -> FaceGenerator:
             batch_size=config.generator.batch_size,
             truncation_psi=config.generator.truncation_psi,
             noise_mode=config.generator.noise_mode,
+        )
+    if config.generator.mode == "stylegan3":
+        return StyleGAN3Generator(
+            repo_path=config.generator.stylegan_repo,
+            network_path=config.generator.network_path,
+            device=config.generator.device,
+            output_resolution=config.generator.output_resolution,
+            batch_size=config.generator.batch_size,
+            noise_mode=config.generator.noise_mode,
+            torch_extensions_dir=str(
+                Path(config.paths.cache_dir) / "torch_extensions"
+            ),
         )
     raise ValueError(f"Unsupported generator mode: {config.generator.mode}")
 

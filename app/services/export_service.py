@@ -14,8 +14,12 @@ from app.models import (
     ExperimentBlock,
     FaceRating,
     FinalSurvey,
+    FinalRefinementEvaluation,
     LatentImage,
     Participant,
+    PersonaCandidateBatch,
+    PersonaInitialization,
+    PersonaProfile,
     ProfileChip,
     RecommendationEvaluation,
     ScreenEvent,
@@ -25,6 +29,9 @@ from app.models import (
 
 EXPORT_MODELS = [
     Participant,
+    PersonaProfile,
+    PersonaCandidateBatch,
+    PersonaInitialization,
     ScreenEvent,
     ExperimentBlock,
     LatentImage,
@@ -33,6 +40,7 @@ EXPORT_MODELS = [
     ProfileChip,
     RecommendationEvaluation,
     FinalSurvey,
+    FinalRefinementEvaluation,
 ]
 
 
@@ -73,4 +81,3 @@ def _serialize(value):
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return value
-

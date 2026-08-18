@@ -109,6 +109,15 @@ def load_config(
                 values["experiment"][key] = value
             elif key == "query":
                 values["query"].update(value)
+            elif key == "mixture_particle_count":
+                values["persona"][key] = value
+        values["persona"]["require_real_clip"] = False
+        values["persona_pool"]["target_size"] = int(
+            values["demo"].get("persona_pool_target_size", 32)
+        )
+        values["persona_pool"]["minimum_usable_size"] = int(
+            values["demo"].get("persona_pool_minimum_usable_size", 8)
+        )
 
     for key in ("data_dir", "cache_dir", "output_dir", "model_dir"):
         values["paths"][key] = _resolve_project_path(values["paths"][key])
@@ -118,9 +127,23 @@ def load_config(
         values["demographic"]["weights"] = _resolve_project_path(
             values["demographic"]["weights"]
         )
+        for key in ("race_weights", "gender_weights", "age_weights"):
+            if key in values["demographic"]:
+                values["demographic"][key] = _resolve_project_path(
+                    values["demographic"][key]
+                )
     if "conditional_prior" in values:
         values["conditional_prior"]["artifact_path"] = _resolve_project_path(
             values["conditional_prior"]["artifact_path"]
+        )
+    if "persona" in values:
+        for key in ("pool_root", "female_pool", "male_pool"):
+            values["persona"][key] = _resolve_project_path(values["persona"][key])
+    if "persona_pool" in values and values["persona_pool"].get(
+        "face_detector_path"
+    ):
+        values["persona_pool"]["face_detector_path"] = _resolve_project_path(
+            values["persona_pool"]["face_detector_path"]
         )
 
     db_url = values["database"]["url"]

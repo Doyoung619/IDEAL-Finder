@@ -12,8 +12,10 @@ from app.models import (
     ExperimentBlock,
     FaceRating,
     FinalSurvey,
+    FinalRefinementEvaluation,
     LatentImage,
     Participant,
+    PersonaInitialization,
     ProfileChip,
     RecommendationEvaluation,
     Selection,
@@ -28,6 +30,10 @@ from app.services.generation_service import (
     image_url,
     update_block_after_selection,
 )
+from app.services.final_evaluation_service import (
+    prepare_final_artifacts,
+    save_final_evaluation,
+)
 from core.algorithm_catalog import (
     algorithm_catalog,
     catalog_by_key,
@@ -36,9 +42,22 @@ from app.services.participant_service import (
     create_participant,
     m_order,
     recommendation_order,
+    strategy_for_block,
 )
 from app.services.profile_service import PROFILE_CATEGORIES
-from experiments.logging_utils import exit_screen, json_dumps
+from app.services.persona_service import (
+    PERSONA_CATEGORIES,
+    PersonaValidationError,
+    answers_from_form,
+    build_persona_prompt_bundle,
+    complete_candidate_batch,
+    confirm_persona_initialization,
+    get_or_create_candidate_batch,
+    get_persona_profile,
+    latest_selected_batch,
+    save_persona_profile,
+)
+from experiments.logging_utils import exit_screen, json_dumps, json_loads
 
 
 router = APIRouter()
@@ -57,6 +76,39 @@ def utc_now() -> datetime:
 
 def redirect(url: str) -> RedirectResponse:
     return RedirectResponse(url=url, status_code=303)
+
+
+def persona_prerequisite_url(db: Session, participant: Participant) -> str | None:
+    if db.get(PersonaInitialization, participant.participant_id) is not None:
+        return None
+    if get_persona_profile(db, participant.participant_id) is None:
+        return "/persona"
+    if latest_selected_batch(db, participant.participant_id) is not None:
+        return "/persona/confirm"
+    return "/persona/candidates"
+
+
+def initialized_destination(db: Session, participant: Participant) -> str:
+    if participant.status == "completed":
+        return "/complete"
+    evaluation = db.scalar(
+        select(FinalRefinementEvaluation).where(
+            FinalRefinementEvaluation.participant_id == participant.participant_id
+        )
+    )
+    if evaluation is not None:
+        return "/survey"
+    blocks = list(
+        db.scalars(
+            select(ExperimentBlock)
+            .where(ExperimentBlock.participant_id == participant.participant_id)
+            .order_by(ExperimentBlock.sequence_index)
+        )
+    )
+    completed = sum(block.completed_at is not None for block in blocks)
+    if completed >= len(m_order(participant)):
+        return "/final-evaluation"
+    return f"/experiment1/instructions?block={completed}"
 
 
 @router.get("/")
@@ -111,11 +163,12 @@ async def submit_basic_info(request: Request, db: Session = Depends(get_db)):
         "age_band",
         "gender",
         "preferred_target_gender",
-        "preferred_age_appearance",
-        "dating_experience",
-        "image_selection_importance",
     ]
-    if any(not form.get(field) for field in required) or form.get("honest") != "yes":
+    if (
+        any(not form.get(field) for field in required)
+        or form.get("honest") != "yes"
+        or form.get("preferred_target_gender") not in {"female", "male"}
+    ):
         return request.app.state.templates.TemplateResponse(
             request,
             "basic_info.html",
@@ -129,14 +182,223 @@ async def submit_basic_info(request: Request, db: Session = Depends(get_db)):
     participant.age_band = str(form["age_band"])
     participant.gender = str(form["gender"])
     participant.preferred_target_gender = str(form["preferred_target_gender"])
-    participant.preferred_face_region = "east_asian_only"
-    participant.preferred_age_appearance = str(form["preferred_age_appearance"])
-    participant.dating_experience = str(form["dating_experience"])
-    participant.image_selection_importance = int(form["image_selection_importance"])
+    participant.preferred_face_region = "unrestricted"
+    participant.preferred_age_appearance = "twenties_boost"
     participant.honest_participation = True
     participant.status = "basic_info_complete"
     db.commit()
     exit_screen(db, participant.participant_id, "basic_info")
+    return redirect("/persona")
+
+
+@router.get("/persona")
+def persona_page(request: Request, db: Session = Depends(get_db)):
+    participant = current_participant(request, db)
+    if participant is None:
+        return redirect("/")
+    if not participant.preferred_target_gender:
+        return redirect("/basic-info")
+    if db.get(PersonaInitialization, participant.participant_id) is not None:
+        return redirect(initialized_destination(db, participant))
+    if latest_selected_batch(db, participant.participant_id) is not None:
+        return redirect("/persona/confirm")
+    profile = get_persona_profile(db, participant.participant_id)
+    selected_values: set[str] = set()
+    priorities: set[str] = set()
+    if profile is not None:
+        responses = json_loads(profile.responses_json, {})
+        selected_values = {value for values in responses.values() for value in values}
+        priorities = set(json_loads(profile.priorities_json, []))
+    return request.app.state.templates.TemplateResponse(
+        request,
+        "persona_questionnaire.html",
+        template_context(
+            request,
+            participant,
+            "persona_questionnaire",
+            db,
+            categories=PERSONA_CATEGORIES,
+            selected_values=selected_values,
+            priorities=priorities,
+        ),
+    )
+
+
+@router.post("/persona")
+async def submit_persona(request: Request, db: Session = Depends(get_db)):
+    participant = current_participant(request, db)
+    if participant is None:
+        return redirect("/")
+    if db.get(PersonaInitialization, participant.participant_id) is not None:
+        return redirect(initialized_destination(db, participant))
+    form = await request.form()
+    answers, priorities = answers_from_form(form)
+    try:
+        bundle = build_persona_prompt_bundle(
+            str(participant.preferred_target_gender),
+            answers,
+            priorities,
+            priority_multiplier=float(request.app.state.config.persona.priority_multiplier),
+        )
+    except PersonaValidationError as exc:
+        return request.app.state.templates.TemplateResponse(
+            request,
+            "persona_questionnaire.html",
+            template_context(
+                request,
+                participant,
+                categories=PERSONA_CATEGORIES,
+                selected_values={value for values in answers.values() for value in values},
+                priorities=set(priorities),
+                error=str(exc),
+            ),
+            status_code=422,
+        )
+    save_persona_profile(
+        db, participant, bundle, request.app.state.config.paths.output_dir
+    )
+    exit_screen(db, participant.participant_id, "persona_questionnaire")
+    return redirect("/persona/candidates")
+
+
+@router.get("/persona/candidates")
+def persona_candidates_page(request: Request, db: Session = Depends(get_db)):
+    participant = current_participant(request, db)
+    if participant is None:
+        return redirect("/")
+    if db.get(PersonaInitialization, participant.participant_id) is not None:
+        return redirect(initialized_destination(db, participant))
+    profile = get_persona_profile(db, participant.participant_id)
+    if profile is None:
+        return redirect("/persona")
+    try:
+        batch, artifacts = get_or_create_candidate_batch(
+            db, request.app.state.runtime, participant, profile
+        )
+    except (RuntimeError, FileNotFoundError, ValueError) as exc:
+        return request.app.state.templates.TemplateResponse(
+            request,
+            "persona_candidates.html",
+            template_context(
+                request,
+                participant,
+                "persona_candidates_error",
+                db,
+                profile=profile,
+                batch=None,
+                cards=[],
+                can_show_more=False,
+                error=str(exc),
+            ),
+            status_code=503,
+        )
+    cards = [
+        {
+            "id": artifact.image_id,
+            "url": image_url(artifact, request.app.state.config.paths.cache_dir),
+        }
+        for artifact in artifacts
+    ]
+    return request.app.state.templates.TemplateResponse(
+        request,
+        "persona_candidates.html",
+        template_context(
+            request,
+            participant,
+            f"persona_candidates_{batch.page_index}",
+            db,
+            profile=profile,
+            batch=batch,
+            cards=cards,
+            can_show_more=(
+                batch.page_index < int(request.app.state.config.persona.max_candidate_pages)
+            ),
+        ),
+    )
+
+
+@router.post("/persona/candidates")
+async def submit_persona_candidates(request: Request, db: Session = Depends(get_db)):
+    participant = current_participant(request, db)
+    if participant is None:
+        return redirect("/")
+    form = await request.form()
+    action = str(form.get("action", "selected"))
+    try:
+        complete_candidate_batch(
+            db,
+            participant,
+            str(form.get("batch_id", "")),
+            action,
+            str(form.get("selected_image_id", "")) or None,
+            float(form.get("reaction_time_sec", 0) or 0),
+        )
+    except (PersonaValidationError, ValueError):
+        return redirect("/persona/candidates")
+    if action == "edit_persona":
+        return redirect("/persona")
+    if action == "show_more":
+        return redirect("/persona/candidates")
+    return redirect("/persona/confirm")
+
+
+@router.get("/persona/confirm")
+def persona_confirm_page(request: Request, db: Session = Depends(get_db)):
+    participant = current_participant(request, db)
+    if participant is None:
+        return redirect("/")
+    if db.get(PersonaInitialization, participant.participant_id) is not None:
+        return redirect(initialized_destination(db, participant))
+    batch = latest_selected_batch(db, participant.participant_id)
+    profile = get_persona_profile(db, participant.participant_id)
+    if profile is None:
+        return redirect("/persona")
+    if batch is None or batch.selected_image_id is None:
+        return redirect("/persona/candidates")
+    artifact = db.get(LatentImage, batch.selected_image_id)
+    if artifact is None:
+        return redirect("/persona/candidates")
+    return request.app.state.templates.TemplateResponse(
+        request,
+        "persona_confirm.html",
+        template_context(
+            request,
+            participant,
+            "persona_confirm",
+            db,
+            profile=profile,
+            batch=batch,
+            image={
+                "id": artifact.image_id,
+                "url": image_url(artifact, request.app.state.config.paths.cache_dir),
+            },
+        ),
+    )
+
+
+@router.post("/persona/confirm")
+async def submit_persona_confirm(request: Request, db: Session = Depends(get_db)):
+    participant = current_participant(request, db)
+    if participant is None:
+        return redirect("/")
+    if db.get(PersonaInitialization, participant.participant_id) is not None:
+        return redirect(initialized_destination(db, participant))
+    batch = latest_selected_batch(db, participant.participant_id)
+    if batch is None:
+        return redirect("/persona/candidates")
+    form = await request.form()
+    try:
+        confirm_persona_initialization(
+            db,
+            request.app.state.runtime,
+            participant,
+            batch,
+            int(form.get("initial_rating", 0)),
+            int(form.get("selection_confidence", 0)),
+        )
+    except (PersonaValidationError, ValueError):
+        return redirect("/persona/confirm")
+    exit_screen(db, participant.participant_id, "persona_confirm")
     return redirect("/experiment1/instructions?block=0")
 
 
@@ -149,11 +411,15 @@ def experiment1_instructions(
     participant = current_participant(request, db)
     if participant is None:
         return redirect("/")
+    prerequisite = persona_prerequisite_url(db, participant)
+    if request.app.state.config.persona.required and prerequisite:
+        return redirect(prerequisite)
     order = m_order(participant)
     if block >= len(order):
-        return redirect("/answer-key")
+        return redirect("/final-evaluation")
     experiment_block = find_block(db, participant, block)
-    algorithm = algorithm_catalog(request.app.state.config)[0]
+    scheduled_mode = strategy_for_block(request.app.state.config, participant, block)
+    algorithm = catalog_by_key(request.app.state.config)[scheduled_mode]
     selected_algorithm = (
         catalog_by_key(request.app.state.config).get(experiment_block.strategy_mode)
         if experiment_block
@@ -184,11 +450,14 @@ async def start_experiment1(request: Request, db: Session = Depends(get_db)):
     participant = current_participant(request, db)
     if participant is None:
         return redirect("/")
+    prerequisite = persona_prerequisite_url(db, participant)
+    if request.app.state.config.persona.required and prerequisite:
+        return redirect(prerequisite)
     form = await request.form()
     block_index = int(form.get("block_index", 0))
     order = m_order(participant)
     if block_index < 0 or block_index >= len(order):
-        return redirect("/answer-key")
+        return redirect("/final-evaluation")
     existing = find_block(db, participant, block_index)
     if existing is None:
         strategy_parameters = {
@@ -206,7 +475,9 @@ async def start_experiment1(request: Request, db: Session = Depends(get_db)):
             request.app.state.runtime,
             participant,
             block_index,
-            strategy_mode="entropy",
+            strategy_mode=strategy_for_block(
+                request.app.state.config, participant, block_index
+            ),
             strategy_parameters=strategy_parameters,
         )
     exit_screen(
@@ -226,9 +497,12 @@ def experiment1_round_page(
     participant = current_participant(request, db)
     if participant is None:
         return redirect("/")
+    prerequisite = persona_prerequisite_url(db, participant)
+    if request.app.state.config.persona.required and prerequisite:
+        return redirect(prerequisite)
     order = m_order(participant)
     if block >= len(order):
-        return redirect("/answer-key")
+        return redirect("/final-evaluation")
     experiment_block = find_block(db, participant, block)
     if experiment_block is None:
         return redirect(f"/experiment1/instructions?block={block}")
@@ -245,7 +519,7 @@ def experiment1_round_page(
         next_block = block + 1
         if next_block < len(order):
             return redirect(f"/experiment1/instructions?block={next_block}")
-        return redirect("/answer-key")
+        return redirect("/final-evaluation")
 
     round_id = completed_rounds + 1
     try:
@@ -319,6 +593,9 @@ async def submit_experiment1_round(
     participant = current_participant(request, db)
     if participant is None:
         return redirect("/")
+    prerequisite = persona_prerequisite_url(db, participant)
+    if request.app.state.config.persona.required and prerequisite:
+        return redirect(prerequisite)
     form = await request.form()
     block_index = int(form["block_index"])
     round_id = int(form["round_id"])
@@ -384,6 +661,8 @@ async def submit_experiment1_round(
         shown_ids,
         selected_image_id,
         round_id,
+        preference_rating=preference_rating,
+        difficulty_rating=difficulty,
     )
     exit_screen(
         db,
@@ -393,11 +672,98 @@ async def submit_experiment1_round(
     return redirect(f"/experiment1/round?block={block_index}")
 
 
+@router.get("/final-evaluation")
+def final_evaluation_page(request: Request, db: Session = Depends(get_db)):
+    participant = current_participant(request, db)
+    if participant is None:
+        return redirect("/")
+    prerequisite = persona_prerequisite_url(db, participant)
+    if request.app.state.config.persona.required and prerequisite:
+        return redirect(prerequisite)
+    existing = db.scalar(
+        select(FinalRefinementEvaluation).where(
+            FinalRefinementEvaluation.participant_id == participant.participant_id
+        )
+    )
+    if existing is not None:
+        return redirect("/survey")
+    completed_blocks = db.scalar(
+        select(func.count(ExperimentBlock.block_id)).where(
+            ExperimentBlock.participant_id == participant.participant_id,
+            ExperimentBlock.completed_at.is_not(None),
+        )
+    ) or 0
+    if completed_blocks < len(m_order(participant)):
+        return redirect(f"/experiment1/instructions?block={completed_blocks}")
+    try:
+        initial, final_map, last_winner, display = prepare_final_artifacts(
+            db, request.app.state.runtime, participant
+        )
+    except RuntimeError:
+        return redirect("/experiment1/instructions?block=0")
+    cards = [
+        {
+            "id": artifact.image_id,
+            "url": image_url(artifact, request.app.state.config.paths.cache_dir),
+        }
+        for artifact in display
+    ]
+    return request.app.state.templates.TemplateResponse(
+        request,
+        "final_evaluation.html",
+        template_context(
+            request,
+            participant,
+            "final_evaluation",
+            db,
+            cards=cards,
+            initial_id=initial.image_id,
+            final_id=final_map.image_id,
+            last_winner_id=last_winner.image_id if last_winner else None,
+        ),
+    )
+
+
+@router.post("/final-evaluation")
+async def submit_final_evaluation(request: Request, db: Session = Depends(get_db)):
+    participant = current_participant(request, db)
+    if participant is None:
+        return redirect("/")
+    try:
+        initial, final_map, last_winner, display = prepare_final_artifacts(
+            db, request.app.state.runtime, participant
+        )
+    except RuntimeError:
+        return redirect("/experiment1/instructions?block=0")
+    form = await request.form()
+    try:
+        save_final_evaluation(
+            db,
+            participant,
+            initial,
+            final_map,
+            last_winner,
+            display,
+            str(form.get("preferred_image_id", "")),
+            int(form.get("initial_rating", 0)),
+            int(form.get("final_rating", 0)),
+            int(form.get("perceived_improvement", 0)),
+            int(form.get("final_match", 0)),
+            float(form.get("reaction_time_sec", 0) or 0),
+        )
+    except (ValueError, TypeError):
+        return redirect("/final-evaluation")
+    exit_screen(db, participant.participant_id, "final_evaluation")
+    return redirect("/survey")
+
+
 @router.get("/answer-key")
 def answer_key_page(request: Request, db: Session = Depends(get_db)):
     participant = current_participant(request, db)
     if participant is None:
         return redirect("/")
+    if not request.app.state.config.evaluation.answer_key_enabled:
+        return redirect("/final-evaluation")
     completed = db.scalar(
         select(func.count(FaceRating.id)).where(
             FaceRating.participant_id == participant.participant_id,
@@ -440,6 +806,8 @@ async def submit_answer_key(request: Request, db: Session = Depends(get_db)):
     participant = current_participant(request, db)
     if participant is None:
         return redirect("/")
+    if not request.app.state.config.evaluation.answer_key_enabled:
+        return redirect("/final-evaluation")
     form = await request.form()
     image_id = str(form.get("image_id", ""))
     rating = int(form.get("rating", 0))
@@ -482,6 +850,8 @@ def profile_page(request: Request, db: Session = Depends(get_db)):
     participant = current_participant(request, db)
     if participant is None:
         return redirect("/")
+    if request.app.state.config.persona.enabled:
+        return redirect("/persona")
     selected = list(
         db.scalars(
             select(ProfileChip).where(
@@ -509,6 +879,8 @@ async def submit_profile(request: Request, db: Session = Depends(get_db)):
     participant = current_participant(request, db)
     if participant is None:
         return redirect("/")
+    if request.app.state.config.persona.enabled:
+        return redirect("/persona")
     form = await request.form()
     selections: dict[str, list[str]] = {}
     for key, value in form.multi_items():
@@ -560,6 +932,8 @@ def experiment2_page(request: Request, db: Session = Depends(get_db)):
     participant = current_participant(request, db)
     if participant is None:
         return redirect("/")
+    if request.app.state.config.persona.enabled:
+        return redirect("/final-evaluation")
     conditions = recommendation_order(participant)
     batches_per_condition = (
         request.app.state.config.experiment.recommendation_batches_per_condition
@@ -628,6 +1002,8 @@ async def submit_experiment2(request: Request, db: Session = Depends(get_db)):
     participant = current_participant(request, db)
     if participant is None:
         return redirect("/")
+    if request.app.state.config.persona.enabled:
+        return redirect("/final-evaluation")
     form = await request.form()
     batch_id = str(form.get("batch_id", ""))
     selected_image_id = str(form.get("selected_image_id", ""))
@@ -691,6 +1067,14 @@ def survey_page(request: Request, db: Session = Depends(get_db)):
     participant = current_participant(request, db)
     if participant is None:
         return redirect("/")
+    if request.app.state.config.evaluation.final_refinement_enabled:
+        evaluation = db.scalar(
+            select(FinalRefinementEvaluation).where(
+                FinalRefinementEvaluation.participant_id == participant.participant_id
+            )
+        )
+        if evaluation is None:
+            return redirect("/final-evaluation")
     existing = db.scalar(
         select(FinalSurvey).where(
             FinalSurvey.participant_id == participant.participant_id
@@ -710,6 +1094,14 @@ async def submit_survey(request: Request, db: Session = Depends(get_db)):
     participant = current_participant(request, db)
     if participant is None:
         return redirect("/")
+    if request.app.state.config.evaluation.final_refinement_enabled:
+        evaluation = db.scalar(
+            select(FinalRefinementEvaluation).where(
+                FinalRefinementEvaluation.participant_id == participant.participant_id
+            )
+        )
+        if evaluation is None:
+            return redirect("/final-evaluation")
     form = await request.form()
     values = [int(form.get(f"q{index}", 0)) for index in range(1, 5)]
     if not all(1 <= value <= 7 for value in values):

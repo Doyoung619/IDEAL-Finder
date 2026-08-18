@@ -28,7 +28,8 @@ generator:
 
 experiment:
   seed: 20260730
-  m_list: [2, 4, 8, 16]
+  m_list: [8, 4, 2]
+  algorithm_order: ["entropy", "rc_mlq"]
   rounds_per_m: 12
   answer_key_faces: 20
   recommendation_conditions: ["none", "basic_info", "click_profile", "selection_history"]
@@ -38,7 +39,7 @@ experiment:
   candidate_pool_multiplier: 4
 
 search:
-  version: "entropy_v1_east_asian_only"
+  version: "rc_mlq_v4_randomized_entropy_spread14"
   pca_dimensions: 32
   pca_fit_samples: 512
 
@@ -69,12 +70,12 @@ demographic:
   device: "auto"
   batch_size: 32
   gender: "female"
-  race_targets: ["east_asian"]
+  race_targets: []
   gender_threshold: 0.90
   race_threshold: 0.80
 
 conditional_prior:
-  artifact_path: "artifacts/priors/{gender}_east_asian_d12.npz"
+  artifact_path: "artifacts/priors/{gender}_20_29_d12.npz"
   latent_space: "w"
   dimension: 12
   selection_mode: "hard"
@@ -91,11 +92,60 @@ query:
   num_restarts: 8
   optimization_steps: 200
   learning_rate: 0.05
+  entropy_output_spread_scale: 1.4
   constraint: "prior_ellipsoid"
   seed: 0
+  beta: 1.0
+  adaptive_beta_enabled: true
+  beta_min: 0.35
+  beta_max: 2.5
+  beta_smoothing: 0.30
+  rc_resolution_min: 0.2
+  rc_resolution_max: 6.0
+  rc_resolution_steps: 120
+  rc_posterior_samples: 4096
+
+persona:
+  enabled: true
+  required: true
+  schema_version: "persona_v1"
+  fixed_race: "unrestricted"
+  fixed_age_range: "20_29"
+  pool_root: "artifacts/persona_pools"
+  female_pool: "artifacts/persona_pools/female_20_29_d12"
+  male_pool: "artifacts/persona_pools/male_20_29_d12"
+  candidate_count: 8
+  shortlist_size: 64
+  max_candidate_pages: 3
+  mmr_lambda: 0.75
+  require_real_clip: true
+  allow_free_text: false
+  prior_covariance_scale: 0.35
+  global_mixture_weight: 0.45
+  global_covariance_scale: 1.0
+  mixture_particle_count: 8192
+  semantic_weights:
+    base: 0.25
+    full: 0.40
+    categories: 0.35
+  priority_multiplier: 2.0
+
+persona_pool:
+  target_size: 3000
+  minimum_usable_size: 1000
+  max_generated: 100000
+  batch_size: 32
+  gender_threshold: 0.80
+  age_20_29_threshold: 0.55
+  minimum_quality: 0.18
+  require_exactly_one_face: true
+
+evaluation:
+  answer_key_enabled: false
+  final_refinement_enabled: true
 
 demo:
-  m_list: [2, 4, 8, 16]
+  m_list: [8, 4, 2]
   rounds_per_m: 1
   answer_key_faces: 3
   recommendation_batches_per_condition: 1
@@ -106,3 +156,7 @@ demo:
     posterior_mc_samples: 64
     num_restarts: 2
     optimization_steps: 30
+    rc_posterior_samples: 512
+  mixture_particle_count: 1024
+  persona_pool_target_size: 32
+  persona_pool_minimum_usable_size: 8

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
@@ -8,7 +10,15 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import LatentImage, Participant, Selection
+from app.models import (
+    FinalRefinementEvaluation,
+    LatentImage,
+    Participant,
+    PersonaCandidateBatch,
+    PersonaInitialization,
+    PersonaProfile,
+    Selection,
+)
 from app.routes.helpers import template_context
 from app.services.export_service import build_csv_export_zip
 
@@ -38,12 +48,52 @@ def admin_page(request: Request, db: Session = Depends(get_db)):
                 "participant": participant,
                 "selection_count": selection_count or 0,
                 "image_count": image_count or 0,
+                "persona_complete": db.get(PersonaInitialization, participant.participant_id) is not None,
+                "persona_pages": db.scalar(
+                    select(func.count(PersonaCandidateBatch.batch_id)).where(
+                        PersonaCandidateBatch.participant_id == participant.participant_id
+                    )
+                ) or 0,
+                "final_complete": db.scalar(
+                    select(func.count(FinalRefinementEvaluation.id)).where(
+                        FinalRefinementEvaluation.participant_id == participant.participant_id
+                    )
+                ) or 0,
+            }
+        )
+    readiness = []
+    minimum = int(request.app.state.config.persona_pool.minimum_usable_size)
+    for gender, directory in (
+        ("female", request.app.state.config.persona.female_pool),
+        ("male", request.app.state.config.persona.male_pool),
+    ):
+        root = Path(directory)
+        metadata_path = root / "metadata.json"
+        metadata = (
+            json.loads(metadata_path.read_text(encoding="utf-8"))
+            if metadata_path.exists()
+            else {}
+        )
+        size = int(metadata.get("size", 0))
+        readiness.append(
+            {
+                "gender": gender,
+                "path": str(root),
+                "size": size,
+                "ready": (root / "pool.npz").exists() and size >= minimum,
+                "version": metadata.get("pool_version", "—"),
             }
         )
     return request.app.state.templates.TemplateResponse(
         request,
         "admin.html",
-        template_context(request, rows=rows),
+        template_context(
+            request,
+            rows=rows,
+            readiness=readiness,
+            minimum_pool_size=minimum,
+            require_real_clip=request.app.state.config.persona.require_real_clip,
+        ),
     )
 
 
@@ -60,4 +110,3 @@ def export_zip(db: Session = Depends(get_db)):
             )
         },
     )
-

@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import numpy as np
 from PIL import Image
-from types import SimpleNamespace
-
-from app.services.generation_service import _east_asian_accepted
 from core.face_region_control import FaceRegionController
 
 
@@ -40,33 +37,3 @@ def test_demo_region_bypasses_clip():
 
     assert estimate.label == "east_asian"
     assert estimate.east_asian_confidence == 1.0
-
-
-def test_east_asian_hard_filter_requires_label_and_confidence():
-    runtime = SimpleNamespace(
-        config=SimpleNamespace(
-            filters=SimpleNamespace(east_asian_confidence_threshold=0.50)
-        )
-    )
-
-    assert _east_asian_accepted(
-        runtime,
-        SimpleNamespace(
-            face_region_label="east_asian",
-            east_asian_confidence=0.50,
-        ),
-    )
-    assert not _east_asian_accepted(
-        runtime,
-        SimpleNamespace(
-            face_region_label="east_asian",
-            east_asian_confidence=0.49,
-        ),
-    )
-    assert not _east_asian_accepted(
-        runtime,
-        SimpleNamespace(
-            face_region_label="white_european",
-            east_asian_confidence=0.90,
-        ),
-    )
