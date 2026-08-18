@@ -13,6 +13,16 @@
       <a class="button button-primary" href="/admin/export.zip">전체 CSV 내보내기</a>
     </div>
   </div>
+  <div class="readiness-grid">
+    {% for item in readiness %}
+    <div class="readiness-card">
+      <span>{{ item.gender }} persona pool</span>
+      <strong>{{ "READY" if item.ready else "NOT READY" }} · {{ item.size }}/{{ minimum_pool_size }}</strong>
+      <small>{{ item.version }} · {{ item.path }}</small>
+    </div>
+    {% endfor %}
+    <div class="readiness-card"><span>Persona retrieval CLIP policy</span><strong>{{ "REAL OPENCLIP REQUIRED" if require_real_clip else "DEMO MOCK ALLOWED" }}</strong></div>
+  </div>
   <div class="table-wrap">
     <table>
       <thead>
@@ -21,6 +31,8 @@
           <th>상태</th>
           <th>생성 이미지</th>
           <th>실험 1 선택</th>
+          <th>Persona</th>
+          <th>최종 평가</th>
           <th>시작 시각</th>
           <th>완료 시각</th>
         </tr>
@@ -32,15 +44,16 @@
             <td><span class="status status-{{ row.participant.status }}">{{ row.participant.status }}</span></td>
             <td>{{ row.image_count }}</td>
             <td>{{ row.selection_count }}</td>
+            <td>{{ "확정" if row.persona_complete else "—" }} · {{ row.persona_pages }} page</td>
+            <td>{{ "완료" if row.final_complete else "—" }}</td>
             <td>{{ row.participant.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
             <td>{{ row.participant.completed_at.strftime("%Y-%m-%d %H:%M") if row.participant.completed_at else "—" }}</td>
           </tr>
         {% else %}
-          <tr><td colspan="6" class="empty-cell">아직 참여자 데이터가 없습니다.</td></tr>
+          <tr><td colspan="8" class="empty-cell">아직 참여자 데이터가 없습니다.</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </section>
 {% endblock %}
-

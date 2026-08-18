@@ -1,0 +1,43 @@
+{
+  "title": "IDEAL-Finder2 Persona Warm-Start",
+  "updated_at": "2026-08-18T06:13:03.433376+00:00",
+  "baseline_commit": "52c35a0",
+  "branch": "persona-warmstart",
+  "tests": {
+    "baseline_passed": 34,
+    "current_passed": 60,
+    "current_failed": 0
+  },
+  "phases": [
+    {
+      "name": "Baseline",
+      "status": "completed",
+      "detail": "Clean main; 34 tests passed"
+    },
+    {
+      "name": "Core persona",
+      "status": "completed",
+      "detail": "Schema, CLIP, pool builder, MMR verified"
+    },
+    {
+      "name": "DB and services",
+      "status": "completed",
+      "detail": "4 new records, artifacts, CSV export"
+    },
+    {
+      "name": "Warm start",
+      "status": "completed",
+      "detail": "Exact 55% persona + 45% global weighted-particle mixture"
+    },
+    {
+      "name": "Web flow",
+      "status": "completed",
+      "detail": "Six balanced-randomized M/method blocks; Entropy output spacing ×1.4"
+    },
+    {
+      "name": "Validation",
+      "status": "completed",
+      "detail": "60 tests; randomized schedule + Entropy spacing ×1.4 verified"
+    }
+  ]
+}

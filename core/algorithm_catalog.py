@@ -31,9 +31,7 @@ class AlgorithmSpec:
 
 
 def algorithm_catalog(config) -> tuple[AlgorithmSpec, ...]:
-    """Expose only the fixed entropy-based synthetic query algorithm."""
-    if config.query.algorithm != "entropy":
-        raise ValueError("Only the entropy query algorithm is currently supported.")
+    """Expose the two pre-registered algorithms used by the fixed study schedule."""
     return (
         AlgorithmSpec(
             key="entropy",
@@ -46,6 +44,18 @@ def algorithm_catalog(config) -> tuple[AlgorithmSpec, ...]:
             parameters=(),
             speed_tier="optimized",
             speed_label="latent 직접 최적화",
+        ),
+        AlgorithmSpec(
+            key="rc_mlq",
+            label="RC-MLQ (Ours)",
+            category="Resolution-calibrated Bayesian line query",
+            summary=(
+                "posterior 최대분산 방향의 quantile 배치를 만들고, posterior 폭과 독립된 "
+                "물리적 resolution grid에서 expected information gain을 최대화합니다."
+            ),
+            parameters=(),
+            speed_tier="optimized",
+            speed_label="고정 물리 해상도 EIG 보정",
         ),
     )
 

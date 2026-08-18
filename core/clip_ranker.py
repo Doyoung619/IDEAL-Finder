@@ -22,16 +22,21 @@ class CLIPRanker:
         pretrained: str = "laion2b_s34b_b79k",
         device: str = "auto",
         batch_size: int = 16,
+        require_real: bool = False,
+        allow_mock: bool = False,
     ) -> None:
         self.enabled = enabled
         self.model_name = model_name
         self.pretrained = pretrained
         self.device = resolve_device(device)
         self.batch_size = batch_size
+        self.require_real = bool(require_real)
+        self.allow_mock = bool(allow_mock)
         self.backend = "disabled"
         self._model = None
         self._preprocess = None
         self._tokenizer = None
+        self._load_error: Exception | None = None
 
     def _ensure_loaded(self) -> bool:
         if not self.enabled or torch is None:
@@ -54,10 +59,78 @@ class CLIPRanker:
             self._tokenizer = open_clip.get_tokenizer(self.model_name)
             self.backend = "open_clip"
             return True
-        except (ImportError, RuntimeError, OSError):
+        except (ImportError, RuntimeError, OSError) as exc:
+            self._load_error = exc
             self.enabled = False
             self.backend = "latent_hash_fallback"
+            if self.require_real:
+                raise RuntimeError(
+                    "Persona retrieval requires a real OpenCLIP model. "
+                    "Install/download the configured checkpoint before research "
+                    "data collection."
+                ) from exc
             return False
+
+    @staticmethod
+    def _normalized(values: np.ndarray) -> np.ndarray:
+        array = np.asarray(values, dtype=np.float32)
+        if array.ndim != 2 or len(array) == 0:
+            raise ValueError("embeddings must be a non-empty 2D array")
+        if not np.isfinite(array).all():
+            raise ValueError("embeddings contain NaN or Inf")
+        norms = np.linalg.norm(array, axis=1, keepdims=True)
+        if np.any(norms <= 0):
+            raise ValueError("embeddings must have non-zero norms")
+        return (array / norms).astype(np.float32)
+
+    @staticmethod
+    def _mock_embedding(payload: bytes, dimensions: int = 64) -> np.ndarray:
+        seed = int.from_bytes(hashlib.sha256(payload).digest()[:8], "big")
+        return np.random.default_rng(seed).standard_normal(dimensions).astype(np.float32)
+
+    def encode_images(self, images: Sequence[Image.Image]) -> np.ndarray:
+        """Return L2-normalized float32 image embeddings."""
+        if not images:
+            raise ValueError("images must not be empty")
+        if self._ensure_loaded():
+            batches = []
+            with torch.no_grad():
+                for start in range(0, len(images), self.batch_size):
+                    tensor = torch.stack(
+                        [self._preprocess(image.convert("RGB")) for image in images[start : start + self.batch_size]]
+                    ).to(self.device)
+                    batches.append(self._model.encode_image(tensor).float().cpu().numpy())
+            return self._normalized(np.concatenate(batches, axis=0))
+        if not self.allow_mock:
+            raise RuntimeError(
+                "Persona retrieval requires a real OpenCLIP model. "
+                "Use demo mode or explicitly enable mock embeddings for tests."
+            )
+        self.backend = "mock_deterministic"
+        values = [
+            self._mock_embedding(image.convert("RGB").tobytes())
+            for image in images
+        ]
+        return self._normalized(np.stack(values))
+
+    def encode_texts(self, texts: Sequence[str]) -> np.ndarray:
+        """Return L2-normalized float32 text embeddings."""
+        if not texts or any(not str(text).strip() for text in texts):
+            raise ValueError("texts must contain non-empty strings")
+        if self._ensure_loaded():
+            with torch.no_grad():
+                tensor = self._tokenizer(list(texts)).to(self.device)
+                values = self._model.encode_text(tensor).float().cpu().numpy()
+            return self._normalized(values)
+        if not self.allow_mock:
+            raise RuntimeError(
+                "Persona retrieval requires a real OpenCLIP model. "
+                "Use demo mode or explicitly enable mock embeddings for tests."
+            )
+        self.backend = "mock_deterministic"
+        return self._normalized(
+            np.stack([self._mock_embedding(str(value).encode("utf-8")) for value in texts])
+        )
 
     def score(
         self,

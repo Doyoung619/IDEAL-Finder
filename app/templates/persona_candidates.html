@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}초기 얼굴 선택 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="wide-section">
+  <div class="experiment-toolbar">
+    <div>
+      <div class="step-label">STEP 3 · INITIAL FACE{% if batch %} · PAGE {{ batch.page_index }}{% endif %}</div>
+      <h1>가장 가까운 얼굴 하나를 골라주세요</h1>
+      <p class="muted">선택한 얼굴의 정확한 좌표에서 반복 탐색을 시작합니다.</p>
+    </div>
+  </div>
+  <div class="persona-summary"><strong>내가 고른 특징</strong><span>{{ profile.korean_summary }}</span></div>
+  {% if batch %}
+  <form method="post" action="/persona/candidates" data-selection-form>
+    <input type="hidden" name="batch_id" value="{{ batch.batch_id }}">
+    <input type="hidden" name="selected_image_id" data-selected-input>
+    <input type="hidden" name="reaction_time_sec" data-reaction-input>
+    <div class="face-grid persona-grid">
+      {% for card in cards %}
+      <button type="button" class="face-card selectable-card" data-image-id="{{ card.id }}" aria-label="얼굴 후보 {{ loop.index }} 선택">
+        <img src="{{ card.url }}" alt="얼굴 후보 {{ loop.index }}">
+        <span class="selection-check">✓</span><span class="face-number">{{ loop.index }}</span>
+      </button>
+      {% endfor %}
+    </div>
+    <div class="candidate-actions">
+      <button class="button button-secondary" type="submit" name="action" value="edit_persona">특징 수정하기</button>
+      {% if can_show_more %}<button class="button button-secondary" type="submit" name="action" value="show_more">다른 얼굴 8개 보기</button>{% endif %}
+      <button class="button button-primary" type="submit" name="action" value="selected" data-require-selection disabled>이 얼굴 선택</button>
+    </div>
+  </form>
+  {% else %}
+  <div class="center-actions"><a class="button button-secondary" href="/persona">특징 수정하기</a></div>
+  {% endif %}
+  <div class="notice subtle">후보 이미지는 인종 제한 없이 선택한 성별과 20–29세 조건을 통과한 pool에서 검색됩니다. 외모 분류 결과는 실제 정체성이나 나이를 판정하지 않습니다.</div>
+</section>
+{% endblock %}

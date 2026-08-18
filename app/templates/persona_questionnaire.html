@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}이상형 특징 설정 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="content-card persona-sheet">
+  <div class="step-label">STEP 2 · PERSONA</div>
+  <h1>어떤 인상의 얼굴을 찾고 있나요?</h1>
+  <p class="muted">각 항목에서 떠오르는 특징만 골라주세요. 기술적인 점수나 모델 용어는 이후 화면에도 표시되지 않습니다.</p>
+  <div class="notice subtle">생성 범위는 인종 제한 없이 한 명의 20–29세 성인, 정면에 가까운 실사형 얼굴 초상으로 고정됩니다.</div>
+  <form method="post" action="/persona" class="stack-form" data-persona-form data-single-submit>
+    <div class="profile-categories">
+      {% for category in categories %}
+      <fieldset class="chip-category" data-persona-category data-max="{{ category.maximum }}">
+        <legend>{{ loop.index }}. {{ category.label_ko }} <span>최대 <b data-persona-count>0</b>/{{ category.maximum }}</span></legend>
+        <div class="chip-row">
+          {% for option in category.options %}
+          <label class="chip">
+            <input type="checkbox" name="persona::{{ category.key }}" value="{{ option.key }}"
+              data-option-key="{{ option.key }}"
+              data-conflicts="{{ category.conflicts_for(option.key)|join(',') }}"
+              {% if option.key in selected_values %}checked{% endif %}>
+            <span>{{ option.label_ko }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </fieldset>
+      {% endfor %}
+    </div>
+
+    <fieldset class="priority-panel" data-priority-panel>
+      <legend>9. 가장 중요한 특징 <span class="legend-hint">앞에서 고른 특징 중 최대 3개</span></legend>
+      <p class="field-help">얼굴을 찾을 때 특히 중요하게 반영되었으면 하는 항목을 골라주세요.</p>
+      <div class="chip-row">
+        {% for category in categories %}
+          {% for option in category.options if option.key != "no_preference" %}
+          <label class="chip priority-chip" data-priority-key="{{ option.key }}">
+            <input type="checkbox" name="priority" value="{{ option.key }}" {% if option.key in priorities %}checked{% endif %}>
+            <span>{{ option.label_ko }}</span>
+          </label>
+          {% endfor %}
+        {% endfor %}
+      </div>
+      <small><b data-priority-count>0</b>/3 선택</small>
+    </fieldset>
+    <div class="button-row sticky-actions">
+      <a class="button button-secondary" href="/basic-info">이전</a>
+      <button class="button button-primary" type="submit">얼굴 후보 보기</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

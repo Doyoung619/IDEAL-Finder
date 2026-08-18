@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}최종 결과 평가 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="wide-section">
+  <div class="experiment-toolbar">
+    <div>
+      <div class="step-label">FINAL · REFINEMENT EVALUATION</div>
+      <h1>현재 이상형에 가장 가까운 얼굴은?</h1>
+      <p class="muted">카드의 생성 단계는 가려져 있으며 표시 순서는 참가자마다 고정 무작위화됩니다.</p>
+    </div>
+  </div>
+  <form method="post" action="/final-evaluation" data-selection-form>
+    <input type="hidden" name="preferred_image_id" data-selected-input>
+    <input type="hidden" name="reaction_time_sec" data-reaction-input>
+    <div class="face-grid final-face-grid">
+      {% for card in cards %}
+      <button type="button" class="face-card selectable-card" data-image-id="{{ card.id }}" aria-label="최종 비교 얼굴 {{ loop.index }} 선택">
+        <img src="{{ card.url }}" alt="최종 비교 얼굴 {{ loop.index }}">
+        <span class="selection-check">✓</span><span class="face-number">{{ loop.index }}</span>
+      </button>
+      {% endfor %}
+    </div>
+    <div class="rating-panel final-rating-panel">
+      <div class="round-ratings">
+        <fieldset>
+          <legend>처음 선택한 얼굴의 만족도 <span class="legend-hint">1–10</span></legend>
+          <div class="scale-row ten">{% for value in range(1, 11) %}<label><input type="radio" name="initial_rating" value="{{ value }}" required><span>{{ value }}</span></label>{% endfor %}</div>
+        </fieldset>
+        <fieldset>
+          <legend>최종 계산된 얼굴의 만족도 <span class="legend-hint">1–10</span></legend>
+          <div class="scale-row ten">{% for value in range(1, 11) %}<label><input type="radio" name="final_rating" value="{{ value }}" required><span>{{ value }}</span></label>{% endfor %}</div>
+        </fieldset>
+        <fieldset>
+          <legend>반복 선택으로 처음보다 원하는 얼굴에 가까워졌나요? <span class="legend-hint">1–7</span></legend>
+          <div class="scale-row">{% for value in range(1, 8) %}<label><input type="radio" name="perceived_improvement" value="{{ value }}" required><span>{{ value }}</span></label>{% endfor %}</div>
+        </fieldset>
+        <fieldset>
+          <legend>최종 얼굴은 이상형에 얼마나 가깝나요? <span class="legend-hint">1–10</span></legend>
+          <div class="scale-row ten">{% for value in range(1, 11) %}<label><input type="radio" name="final_match" value="{{ value }}" required><span>{{ value }}</span></label>{% endfor %}</div>
+        </fieldset>
+      </div>
+      <button class="button button-primary" type="submit" data-require-selection disabled>평가 제출</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

@@ -54,7 +54,7 @@ def target_probabilities(
     condition: DemographicCondition,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Extract target gender and aggregated target-race probabilities."""
-    if set(predictions) != {"gender", "race"}:
+    if not {"gender", "race"}.issubset(predictions):
         raise ValueError("classifier output must contain gender and race")
     gender = predictions["gender"].detach().cpu().numpy()
     race = predictions["race"].detach().cpu().numpy()

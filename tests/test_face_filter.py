@@ -9,6 +9,7 @@ def test_non_face_image_is_rejected_by_hard_detector():
 
     assert not estimate.accepted
     assert not estimate.face_detected
+    assert estimate.face_count == 0
     assert estimate.score == 0.0
     assert estimate.backend.startswith(
         ("opencv_haar", "face_detector_unavailable")

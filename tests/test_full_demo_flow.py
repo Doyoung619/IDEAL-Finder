@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import re
+import pickle
 from pathlib import Path
+
+import numpy as np
 
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
@@ -11,14 +14,19 @@ from app.main import create_app
 from app.models import (
     ExperimentBlock,
     FaceRating,
+    FinalRefinementEvaluation,
     FinalSurvey,
     LatentImage,
     Participant,
+    PersonaCandidateBatch,
+    PersonaInitialization,
+    PersonaProfile,
     ProfileChip,
     RecommendationEvaluation,
     Selection,
 )
 from app.settings import load_config
+from app.services.persona_service import PERSONA_CATEGORIES
 
 
 def _hidden_value(html: str, name: str) -> str:
@@ -68,12 +76,36 @@ def test_complete_demo_experiment(tmp_path):
             },
         )
 
-        for block_index in range(4):
+        persona_data = {
+            f"persona::{category.key}": "no_preference"
+            for category in PERSONA_CATEGORIES
+        }
+        client.post("/persona", data=persona_data)
+        candidates = client.get("/persona/candidates")
+        selected_persona_id = _first_image_id(candidates.text)
+        client.post(
+            "/persona/candidates",
+            data={
+                "batch_id": _hidden_value(candidates.text, "batch_id"),
+                "selected_image_id": selected_persona_id,
+                "action": "selected",
+                "reaction_time_sec": "1.0",
+            },
+        )
+        client.post(
+            "/persona/confirm",
+            data={"initial_rating": "8", "selection_confidence": "6"},
+        )
+
+        for block_index in range(6):
             instruction = client.get(
                 f"/experiment1/instructions?block={block_index}"
             )
             assert instruction.status_code == 200
-            assert "Entropy Query" in instruction.text
+            assert (
+                "Entropy Query" in instruction.text
+                or "RC-MLQ (Ours)" in instruction.text
+            )
             assert 'name="strategy_mode"' not in instruction.text
             start = client.post(
                 "/experiment1/start",
@@ -101,45 +133,23 @@ def test_complete_demo_experiment(tmp_path):
                 follow_redirects=False,
             )
             assert response.status_code == 303
+            client.get(f"/experiment1/round?block={block_index}")
 
-        for _ in range(2):
-            answer_page = client.get("/answer-key")
-            assert answer_page.status_code == 200
-            response = client.post(
-                "/answer-key",
-                data={
-                    "image_id": _hidden_value(answer_page.text, "image_id"),
-                    "rating": "8",
-                },
-                follow_redirects=False,
-            )
-            assert response.status_code == 303
-
-        profile = client.get("/profile")
-        assert profile.status_code == 200
-        client.post(
-            "/profile",
+        final_page = client.get("/final-evaluation")
+        assert final_page.status_code == 200
+        response = client.post(
+            "/final-evaluation",
             data={
-                "category::전반적 스타일/무드": "지적인",
-                "category::머리 스타일": "웨이브",
+                "preferred_image_id": _first_image_id(final_page.text),
+                "initial_rating": "8",
+                "final_rating": "9",
+                "perceived_improvement": "6",
+                "final_match": "9",
+                "reaction_time_sec": "2.5",
             },
+            follow_redirects=False,
         )
-
-        for _ in range(4):
-            recommendation = client.get("/experiment2")
-            assert recommendation.status_code == 200
-            response = client.post(
-                "/experiment2",
-                data={
-                    "batch_id": _hidden_value(recommendation.text, "batch_id"),
-                    "selected_image_id": _first_image_id(recommendation.text),
-                    "contains_ideal_type": "yes",
-                    "rating": "7",
-                    "reaction_time_sec": "2.5",
-                },
-                follow_redirects=False,
-            )
-            assert response.status_code == 303
+        assert response.headers["location"] == "/survey"
 
         survey = client.get("/survey")
         assert survey.status_code == 200
@@ -162,13 +172,34 @@ def test_complete_demo_experiment(tmp_path):
             select(ExperimentBlock).order_by(ExperimentBlock.sequence_index)
         )
         assert participant.status == "completed"
-        assert db.scalar(select(func.count(ExperimentBlock.block_id))) == 4
-        assert db.scalar(select(func.count(Selection.id))) == 4
-        assert db.scalar(select(func.count(RecommendationEvaluation.id))) == 4
-        assert db.scalar(select(func.count(FaceRating.id))) == 10
-        assert db.scalar(select(func.count(ProfileChip.id))) == 2
+        assert db.scalar(select(func.count(ExperimentBlock.block_id))) == 6
+        assert db.scalar(select(func.count(Selection.id))) == 6
+        assert db.scalar(select(func.count(RecommendationEvaluation.id))) == 0
+        assert db.scalar(select(func.count(FaceRating.id))) == 6
+        assert db.scalar(select(func.count(ProfileChip.id))) == 0
+        assert db.scalar(select(func.count(PersonaProfile.id))) == 1
+        assert db.scalar(select(func.count(PersonaCandidateBatch.batch_id))) == 1
+        assert db.scalar(select(func.count(PersonaInitialization.participant_id))) == 1
+        assert db.scalar(select(func.count(FinalRefinementEvaluation.id))) == 1
         assert db.scalar(select(func.count(FinalSurvey.id))) == 1
-        assert db.scalar(select(func.count(LatentImage.image_id))) >= 18
+        assert db.scalar(select(func.count(LatentImage.image_id))) >= 36
+        initialization = db.get(PersonaInitialization, participant.participant_id)
+        selected_theta = np.load(initialization.theta_path)
+        blocks = list(
+            db.scalars(select(ExperimentBlock).order_by(ExperimentBlock.sequence_index))
+        )
+        assert len({block.strategy_state_path for block in blocks}) == 6
+        assert sorted(block.m_value for block in blocks) == [2, 2, 4, 4, 8, 8]
+        for m_value in (2, 4, 8):
+            assert {
+                block.strategy_mode for block in blocks if block.m_value == m_value
+            } == {"entropy", "rc_mlq"}
+        for block in blocks:
+            with Path(block.strategy_state_path).open("rb") as handle:
+                state = pickle.load(handle)
+            assert np.array_equal(state["mixture"]["local_mean"], selected_theta)
+            assert state["mixture"]["global_weight"] == 0.45
+            assert state["prior_covariance_scale"] == 0.35
         round_directory = (
             Path(first_block.strategy_state_path).parent / "round_01"
         )
@@ -177,7 +208,9 @@ def test_complete_demo_experiment(tmp_path):
         assert (round_directory / "posterior_mean.npy").exists()
         assert (round_directory / "posterior_covariance.npy").exists()
         assert (round_directory / "map_estimate.npy").exists()
-        assert (round_directory / "entropy_metrics.json").exists()
+        assert (
+            round_directory / f"{first_block.strategy_mode}_metrics.json"
+        ).exists()
         assert (round_directory / "observed_choice.json").exists()
         assert len(
             list((round_directory / "decoded_images").glob("*.png"))

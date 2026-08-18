@@ -35,5 +35,8 @@ def test_screen_logging_and_csv_export(tmp_path):
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             assert "participants.csv" in archive.namelist()
             assert "screens.csv" in archive.namelist()
+            assert "persona_profiles.csv" in archive.namelist()
+            assert "persona_candidate_batches.csv" in archive.namelist()
+            assert "persona_initializations.csv" in archive.namelist()
+            assert "final_refinement_evaluations.csv" in archive.namelist()
             assert "ITD-TEST0001" in archive.read("participants.csv").decode("utf-8")
-

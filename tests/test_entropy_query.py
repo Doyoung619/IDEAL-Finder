@@ -98,6 +98,35 @@ def test_same_seed_reproduces_identical_query_set():
     assert first.mutual_information == second.mutual_information
 
 
+def test_configured_output_spread_increases_all_entropy_query_distances():
+    prior = make_prior()
+    posterior = GaussianPreferencePosterior.initialize_from_prior(prior)
+    base_config = dict(
+        posterior_mc_samples=96,
+        num_restarts=2,
+        optimization_steps=20,
+        learning_rate=0.05,
+        seed=17,
+        device="cpu",
+    )
+    base = EntropyQuerySelector(EntropyQueryConfig(**base_config)).select(
+        posterior, prior.theta_covariance, 4, seed=23
+    )
+    spread = EntropyQuerySelector(
+        EntropyQueryConfig(**base_config, output_spread_scale=1.4)
+    ).select(posterior, prior.theta_covariance, 4, seed=23)
+    assert np.allclose(
+        spread.query_points - posterior.mean,
+        1.4 * (base.query_points - posterior.mean),
+    )
+    assert np.isclose(
+        spread.min_pairwise_distance,
+        1.4 * base.min_pairwise_distance,
+        rtol=1e-5,
+    )
+    assert spread.max_mahalanobis_radius <= 1.4 + 1e-5
+
+
 def test_posterior_update_and_end_to_end_decoder_round():
     prior = make_prior()
     posterior = GaussianPreferencePosterior.initialize_from_prior(prior)
@@ -122,7 +151,7 @@ def test_posterior_update_and_end_to_end_decoder_round():
     assert np.isfinite(posterior.map_estimate).all()
 
 
-def test_factory_and_registry_reject_non_entropy_without_fallback():
+def test_factory_supports_both_registered_algorithms_without_fallback():
     config = load_config(demo_override=True)
     prior = make_prior()
     generator = MockStyleGANGenerator(w_dimension=prior.w_dimension)
@@ -138,8 +167,16 @@ def test_factory_and_registry_reject_non_entropy_without_fallback():
         },
     )
     assert strategy.name == "entropy"
+    rc_strategy = create_query_strategy(
+        config,
+        generator,
+        mode="rc_mlq",
+        conditional_prior=prior,
+        parameters={"rc_posterior_samples": 512},
+    )
+    assert rc_strategy.name == "rc_mlq"
     with pytest.raises(
-        ValueError, match="Only the entropy query algorithm is currently supported"
+        ValueError, match="Unsupported query algorithm"
     ):
         create_query_strategy(
             config,

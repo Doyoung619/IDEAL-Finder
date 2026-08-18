@@ -15,6 +15,7 @@ from app.models import (
     ExperimentBlock,
     LatentImage,
     Participant,
+    PersonaInitialization,
     ProfileChip,
     Selection,
 )
@@ -77,7 +78,7 @@ def ensure_participant_baseline(
     accepted = generate_filtered_prior_candidates(
         runtime,
         participant.preferred_target_gender,
-        "east_asian_only",
+        "unrestricted",
         participant.preferred_age_appearance,
         count=8,
         seed=seed,
@@ -86,7 +87,7 @@ def ensure_participant_baseline(
         accepted,
         key=lambda item: _demographic_preference_score(
             item,
-            "east_asian_only",
+            "unrestricted",
             participant.preferred_age_appearance,
         ),
     )
@@ -146,15 +147,29 @@ def get_or_create_block(
     if existing is not None:
         return existing
     selected_mode = strategy_mode or "entropy"
-    if selected_mode != "entropy":
-        raise ValueError("Only the entropy query algorithm is currently supported.")
+    if selected_mode not in set(runtime.config.experiment.algorithm_order):
+        raise ValueError(f"Unsupported query algorithm: {selected_mode}")
     strategy_parameters = strategy_parameters or {}
 
     conditional_prior = runtime.conditional_prior(strategy_parameters)
-    baseline = np.asarray(
-        conditional_prior.theta_to_w(conditional_prior.theta_mean),
-        dtype=np.float32,
-    )
+    initialization = db.get(PersonaInitialization, participant.participant_id)
+    if initialization is None and runtime.config.persona.required:
+        raise RuntimeError(
+            "Persona warm start is required before the experiment can begin."
+        )
+    if initialization is not None:
+        initial_theta = np.asarray(np.load(initialization.theta_path), dtype=np.float32)
+        baseline = np.asarray(np.load(initialization.w_path), dtype=np.float32)
+    else:
+        initial_theta = conditional_prior.theta_mean.astype(np.float32)
+        baseline = np.asarray(
+            conditional_prior.theta_to_w(initial_theta), dtype=np.float32
+        )
+    if initial_theta.shape != (conditional_prior.dimension,):
+        raise ValueError("Persona theta dimension does not match the conditional prior")
+    expected_w = np.asarray(conditional_prior.theta_to_w(initial_theta), dtype=np.float32)
+    if baseline.shape != expected_w.shape or not np.allclose(baseline, expected_w, atol=1e-5):
+        raise ValueError("Persona W is not the exact transform of the selected theta")
     block_dir = (
         Path(runtime.config.paths.output_dir)
         / participant.participant_id
@@ -165,8 +180,38 @@ def get_or_create_block(
     state_path = block_dir / "strategy_state.pkl"
     block_dir.mkdir(parents=True, exist_ok=True)
     np.save(mu_path, baseline.astype(np.float32))
+    np.save(block_dir / "initial_theta.npy", initial_theta.astype(np.float32))
+    np.save(block_dir / "initial_w.npy", baseline.astype(np.float32))
+    covariance_scale = float(runtime.config.persona.prior_covariance_scale)
+    strategy_parameters = {
+        **strategy_parameters,
+        "warm_start_required": bool(runtime.config.persona.required),
+        "warm_start_type": "persona" if initialization is not None else "legacy_prior",
+        "warm_start_pool_id": (
+            initialization.selected_pool_id if initialization is not None else None
+        ),
+        "warm_start_profile_version": (
+            runtime.config.persona.schema_version if initialization is not None else None
+        ),
+        "prior_covariance_scale": covariance_scale,
+    }
+    strategy = runtime.strategy_for(selected_mode, strategy_parameters)
+    strategy.initialize_state(
+        str(state_path),
+        initial_mean=initial_theta,
+        covariance_scale=covariance_scale,
+        metadata={
+            "participant_id": participant.participant_id,
+            "selected_pool_id": (
+                initialization.selected_pool_id if initialization is not None else None
+            ),
+            "persona_schema_version": (
+                runtime.config.persona.schema_version if initialization is not None else None
+            ),
+        },
+    )
     initial_seed = stable_seed(
-        f"{participant.participant_id}:entropy-initial",
+        f"{participant.participant_id}:shared-mixture-initial",
         participant.base_seed,
     )
     block = ExperimentBlock(
@@ -184,6 +229,8 @@ def get_or_create_block(
         strategy_parameters_json=json_dumps(strategy_parameters),
     )
     db.add(block)
+    if initialization is not None:
+        participant.baseline_latent_path = initialization.w_path
     db.commit()
     return block
 
@@ -224,9 +271,7 @@ def generate_experiment_round(
     if existing:
         return existing
 
-    if block.strategy_mode != "entropy":
-        raise ValueError("Only the entropy query algorithm is currently supported.")
-    return _generate_entropy_round(
+    return _generate_query_round(
         db=db,
         runtime=runtime,
         participant=participant,
@@ -235,7 +280,7 @@ def generate_experiment_round(
     )
 
 
-def _generate_entropy_round(
+def _generate_query_round(
     db: Session,
     runtime,
     participant: Participant,
@@ -245,7 +290,7 @@ def _generate_entropy_round(
     """Optimize, decode, persist, and return one direct synthetic query set."""
     ensure_block_files(block)
     strategy_parameters = json_loads(block.strategy_parameters_json or "{}")
-    strategy = runtime.strategy_for("entropy", strategy_parameters)
+    strategy = runtime.strategy_for(block.strategy_mode, strategy_parameters)
     center = np.load(block.mu_path)
     seed = (
         block.initial_seed
@@ -265,7 +310,7 @@ def _generate_entropy_round(
     )
     if len(proposal.latents) != block.m_value:
         raise RuntimeError(
-            "Entropy Query returned an unexpected number of synthetic queries"
+            f"{block.strategy_mode} returned an unexpected number of synthetic queries"
         )
     sync_block_files(block)
     evaluated = evaluate_candidates(runtime, proposal.latents)
@@ -283,14 +328,14 @@ def _generate_entropy_round(
         )
         metadata = {
             "search_version": runtime.config.search.version,
-            "query_algorithm": "entropy",
+            "query_algorithm": block.strategy_mode,
             "proposal_backend": proposal.backend,
             "proposal_feature": proposal.features[display_index].tolist(),
             "display_index": display_index,
             "proposal_role": (
                 proposal.roles[display_index] if proposal.roles else None
             ),
-            "entropy_metrics": proposal.metadata,
+            "query_metrics": proposal.metadata,
         }
         artifacts.append(
             persist_candidate(
@@ -299,7 +344,7 @@ def _generate_entropy_round(
                 participant=participant,
                 candidate=candidate,
                 stage_type="experiment1",
-                condition_type=f"M={block.m_value}",
+                condition_type=f"{block.strategy_mode}|M={block.m_value}",
                 seed=seed + display_index,
                 block_id=block.block_id,
                 round_id=round_id,
@@ -318,9 +363,9 @@ def update_block_after_selection(
     shown_image_ids: list[str],
     selected_image_id: str,
     round_id: int,
+    preference_rating: int | None = None,
+    difficulty_rating: int | None = None,
 ) -> None:
-    if block.strategy_mode != "entropy":
-        raise ValueError("Only the entropy query algorithm is currently supported.")
     ensure_block_files(block)
     strategy_parameters = json_loads(block.strategy_parameters_json or "{}")
     strategy = runtime.strategy_for(block.strategy_mode, strategy_parameters)
@@ -337,6 +382,8 @@ def update_block_after_selection(
         shown_latents=shown_latents,
         winner_latent=winner_latent,
         state_path=block.strategy_state_path,
+        preference_rating=preference_rating,
+        difficulty_rating=difficulty_rating,
     )
     np.save(block.mu_path, new_center.astype(np.float32))
     block.sigma = new_sigma
@@ -610,7 +657,6 @@ def generate_filtered_prior_candidates(
             for candidate in evaluated
             if candidate.quality_accepted
             and candidate.face_detected
-            and _east_asian_accepted(runtime, candidate)
             and _adult_accepted(runtime, candidate)
             and _portrait_accepted(runtime, candidate)
             and runtime.gender_controller.accepts(
@@ -622,7 +668,7 @@ def generate_filtered_prior_candidates(
             break
     if len(accepted) < count:
         raise RuntimeError(
-            f"Only {len(accepted)} hard-valid East Asian faces were generated "
+            f"Only {len(accepted)} hard-valid gender/age faces were generated "
             f"for required={count}."
         )
     accepted.sort(
@@ -751,7 +797,6 @@ def accepted_candidate_indices(
         for index, candidate in enumerate(evaluated)
         if candidate.quality_accepted
         and candidate.face_detected
-        and _east_asian_accepted(runtime, candidate)
         and _adult_accepted(runtime, candidate)
         and _portrait_accepted(runtime, candidate)
         and runtime.gender_controller.accepts(
@@ -761,8 +806,8 @@ def accepted_candidate_indices(
     ]
     if len(strict) < required:
         raise RuntimeError(
-            "Not enough generated faces passed the hard East Asian, face, adult, "
-            "portrait, and gender filters."
+            "Not enough generated faces passed the face, adult, portrait, and "
+            "gender filters."
         )
     return strict, False
 
@@ -777,7 +822,6 @@ def strict_candidate_indices(
         for index, candidate in enumerate(evaluated)
         if candidate.quality_accepted
         and candidate.face_detected
-        and _east_asian_accepted(runtime, candidate)
         and _adult_accepted(runtime, candidate)
         and _portrait_accepted(runtime, candidate)
         and runtime.gender_controller.accepts(
@@ -1106,12 +1150,4 @@ def _portrait_accepted(runtime, candidate: EvaluatedCandidate) -> bool:
             confidence=candidate.portrait_confidence,
             backend=candidate.portrait_backend,
         )
-    )
-
-
-def _east_asian_accepted(runtime, candidate: EvaluatedCandidate) -> bool:
-    return (
-        candidate.face_region_label == "east_asian"
-        and candidate.east_asian_confidence
-        >= float(runtime.config.filters.east_asian_confidence_threshold)
     )

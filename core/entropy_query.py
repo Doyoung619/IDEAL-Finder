@@ -17,6 +17,7 @@ class EntropyQueryConfig:
     learning_rate: float = 0.05
     seed: int = 0
     device: str = "cpu"
+    output_spread_scale: float = 1.0
 
     def __post_init__(self) -> None:
         if self.posterior_mc_samples < 2:
@@ -25,6 +26,8 @@ class EntropyQueryConfig:
             raise ValueError("restart and optimization step counts must be positive")
         if self.learning_rate <= 0:
             raise ValueError("learning_rate must be positive")
+        if self.output_spread_scale < 1.0:
+            raise ValueError("output_spread_scale must be at least one")
 
 
 @dataclass
@@ -40,6 +43,9 @@ class EntropyQueryResult:
     restart: int
     optimization_steps: int
     initial_mutual_information: float
+    spread_scale: float = 1.0
+    pre_spread_mutual_information: float | None = None
+    pre_spread_min_pairwise_distance: float | None = None
 
     def metadata(self) -> dict[str, Any]:
         """Return JSON-serializable optimization metrics."""
@@ -53,12 +59,16 @@ class EntropyQueryResult:
             "selected_restart": self.restart,
             "optimization_steps": self.optimization_steps,
             "initial_mutual_information": self.initial_mutual_information,
+            "spread_scale": self.spread_scale,
+            "pre_spread_mutual_information": self.pre_spread_mutual_information,
+            "pre_spread_min_pairwise_distance": self.pre_spread_min_pairwise_distance,
         }
 
 
 def choice_probabilities(
     posterior_samples: torch.Tensor,
     query_points: torch.Tensor,
+    beta: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Evaluate the stable distance-based M-way softmax choice model."""
     if posterior_samples.ndim != 2 or query_points.ndim != 2:
@@ -69,7 +79,7 @@ def choice_probabilities(
         (posterior_samples[:, None, :] - query_points[None, :, :]) ** 2,
         dim=-1,
     )
-    logits = -0.5 * squared_distances
+    logits = -float(beta) * squared_distances
     probabilities = torch.softmax(logits, dim=-1)
     log_probabilities = logits - torch.logsumexp(logits, dim=-1, keepdim=True)
     return probabilities, log_probabilities
@@ -78,10 +88,11 @@ def choice_probabilities(
 def mutual_information(
     posterior_samples: torch.Tensor,
     query_points: torch.Tensor,
+    beta: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Compute predictive entropy minus expected conditional entropy."""
     probabilities, log_probabilities = choice_probabilities(
-        posterior_samples, query_points
+        posterior_samples, query_points, beta=beta
     )
     epsilon = torch.finfo(probabilities.dtype).eps
     predictive = probabilities.mean(dim=0)
@@ -157,7 +168,9 @@ class EntropyQuerySelector:
             with torch.no_grad():
                 self._project_unit_ball(raw_u)
                 initial_queries = center[None, :] + raw_u @ prior_factor.T
-                initial_score, _, _ = mutual_information(samples, initial_queries)
+                initial_score, _, _ = mutual_information(
+                    samples, initial_queries, beta=float(posterior.beta)
+                )
             if not torch.isfinite(initial_score):
                 failures.append(f"restart {restart}: non-finite initial score")
                 continue
@@ -168,12 +181,15 @@ class EntropyQuerySelector:
                 prior_factor,
                 restart,
                 float(initial_score.item()),
+                beta=float(posterior.beta),
             )
             failed = False
             for _ in range(self.config.optimization_steps):
                 optimizer.zero_grad(set_to_none=True)
                 queries = center[None, :] + raw_u @ prior_factor.T
-                score, _, _ = mutual_information(samples, queries)
+                score, _, _ = mutual_information(
+                    samples, queries, beta=float(posterior.beta)
+                )
                 if not torch.isfinite(score):
                     failures.append(f"restart {restart}: non-finite objective")
                     failed = True
@@ -193,6 +209,7 @@ class EntropyQuerySelector:
                         prior_factor,
                         restart,
                         float(initial_score.item()),
+                        beta=float(posterior.beta),
                     )
                 if candidate["mutual_information"] > local_best["mutual_information"]:
                     local_best = candidate
@@ -209,6 +226,22 @@ class EntropyQuerySelector:
             best["mutual_information"]
         ):
             raise RuntimeError("Entropy-query optimization returned non-finite values")
+        pre_spread_information = float(best["mutual_information"])
+        pre_spread_distance = float(best["min_pairwise_distance"])
+        spread_scale = float(self.config.output_spread_scale)
+        if spread_scale > 1.0:
+            expanded = center[None, :] + spread_scale * (
+                torch.as_tensor(best["query_points"], device=self.device) - center[None, :]
+            )
+            score, predictive, conditional = mutual_information(
+                samples, expanded, beta=float(posterior.beta)
+            )
+            best["query_points"] = expanded.detach().cpu().numpy().astype(np.float32)
+            best["mutual_information"] = float(score.item())
+            best["predictive_entropy"] = float(predictive.item())
+            best["expected_conditional_entropy"] = float(conditional.item())
+            best["min_pairwise_distance"] = float(torch.pdist(expanded).min().item())
+            best["max_mahalanobis_radius"] *= spread_scale
         return EntropyQueryResult(
             query_points=best["query_points"],
             mutual_information=best["mutual_information"],
@@ -219,6 +252,9 @@ class EntropyQuerySelector:
             restart=best["restart"],
             optimization_steps=self.config.optimization_steps,
             initial_mutual_information=best["initial_mutual_information"],
+            spread_scale=spread_scale,
+            pre_spread_mutual_information=pre_spread_information,
+            pre_spread_min_pairwise_distance=pre_spread_distance,
         )
 
     @staticmethod
@@ -263,9 +299,12 @@ class EntropyQuerySelector:
         prior_factor: torch.Tensor,
         restart: int,
         initial_score: float,
+        beta: float,
     ) -> dict[str, Any]:
         queries = center[None, :] + raw_u @ prior_factor.T
-        score, predictive, conditional = mutual_information(samples, queries)
+        score, predictive, conditional = mutual_information(
+            samples, queries, beta=beta
+        )
         if len(queries) > 1:
             distances = torch.pdist(queries)
             minimum_distance = float(distances.min().item())

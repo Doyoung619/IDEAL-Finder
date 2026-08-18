@@ -62,4 +62,52 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
+  document.querySelectorAll("[data-persona-form]").forEach((form) => {
+    const priorityBoxes = [...form.querySelectorAll('[name="priority"]')];
+    const priorityCount = form.querySelector("[data-priority-count]");
+    const refreshPriorities = () => {
+      const selectedKeys = new Set(
+        [...form.querySelectorAll('[data-persona-category] input:checked')]
+          .filter((box) => box.value !== "no_preference")
+          .map((box) => box.value)
+      );
+      priorityBoxes.forEach((box) => {
+        const wrapper = box.closest("[data-priority-key]");
+        const available = selectedKeys.has(box.value);
+        wrapper.hidden = !available;
+        if (!available) box.checked = false;
+      });
+      const checked = priorityBoxes.filter((box) => box.checked);
+      priorityBoxes.forEach((box) => {
+        box.disabled = !box.checked && checked.length >= 3;
+      });
+      if (priorityCount) priorityCount.textContent = checked.length;
+    };
+    form.querySelectorAll("[data-persona-category]").forEach((category) => {
+      const boxes = [...category.querySelectorAll('input[type="checkbox"]')];
+      const maximum = Number(category.dataset.max);
+      const count = category.querySelector("[data-persona-count]");
+      const refresh = (changed) => {
+        const noPreference = boxes.find((box) => box.value === "no_preference");
+        if (changed?.value === "no_preference" && changed.checked) {
+          boxes.forEach((box) => { if (box !== changed) box.checked = false; });
+        } else if (changed?.checked && noPreference) {
+          noPreference.checked = false;
+          const conflicts = new Set((changed.dataset.conflicts || "").split(",").filter(Boolean));
+          boxes.forEach((box) => { if (conflicts.has(box.value)) box.checked = false; });
+        }
+        const concrete = boxes.filter((box) => box.checked && box.value !== "no_preference");
+        boxes.forEach((box) => {
+          if (box.value !== "no_preference") box.disabled = !box.checked && concrete.length >= maximum;
+        });
+        if (count) count.textContent = concrete.length;
+        refreshPriorities();
+      };
+      boxes.forEach((box) => box.addEventListener("change", () => refresh(box)));
+      refresh();
+    });
+    priorityBoxes.forEach((box) => box.addEventListener("change", refreshPriorities));
+    refreshPriorities();
+  });
+
 });

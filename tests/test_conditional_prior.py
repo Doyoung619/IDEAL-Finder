@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 
 from core.conditional_prior import ConditionalPCAPrior, DemographicCondition
@@ -43,3 +45,32 @@ def test_prior_shapes_eigenvalues_and_sampling_are_reproducible():
     assert first.shape == (4, 3)
     assert np.array_equal(first, second)
     assert np.isfinite(prior.log_prob(first)).all()
+
+
+def test_loads_validated_ideal_stylegan3_prior_schema(tmp_path):
+    metadata = {
+        "target": "male",
+        "candidate_count": 3000,
+        "generator": "NVIDIA StyleGAN3-R FFHQ-U 256x256",
+        "target_definition": "East Asian, Male, age 20-39",
+        "thresholds": {"east_asian": 0.35, "gender": 0.55},
+    }
+    path = tmp_path / "ideal.npz"
+    np.savez_compressed(
+        path,
+        mu=np.zeros(6, dtype=np.float32),
+        basis=np.eye(6, dtype=np.float32)[:, :3],
+        eigvals=np.asarray([4.0, 2.0, 1.0], dtype=np.float32),
+        latent_dim=np.asarray(3),
+        clip=np.asarray(1.5, dtype=np.float32),
+        scale=np.asarray(0.65, dtype=np.float32),
+        metadata=np.asarray(json.dumps(metadata)),
+    )
+    prior = ConditionalPCAPrior.load(path)
+
+    assert prior.condition == DemographicCondition("male", ("east_asian",))
+    assert prior.dimension == 3
+    assert prior.w_dimension == 6
+    assert prior.coordinate_clip == 1.5
+    assert np.isclose(prior.sampling_scale, 0.65)
+    assert np.max(np.abs(prior.sample_theta(64))) <= 1.5
