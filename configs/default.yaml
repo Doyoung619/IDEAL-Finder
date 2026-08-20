@@ -4,6 +4,8 @@ app:
   port: 8000
   secret_key: "change-this-before-data-collection"
   debug: false
+  consent_version: "unspecified"
+  secure_cookies: false
 
 database:
   url: "sqlite:///data/ideal_type_detector.sqlite3"
@@ -107,6 +109,17 @@ query:
   rc_resolution_max: 6.0
   rc_resolution_steps: 120
   rc_posterior_samples: 4096
+
+query_diversity:
+  enabled: false
+  latent_min_distance: 0.15
+  image_similarity_threshold: null
+  max_retries: 3
+  perturbation_initial: 0.10
+  perturbation_max: 0.40
+  max_relative_ig_loss: 0.05
+  radius_expansion_factors: [1.1, 1.2, 1.35]
+  orthogonal_fallback: true
 
 persona:
   enabled: true

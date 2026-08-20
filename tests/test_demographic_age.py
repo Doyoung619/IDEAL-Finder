@@ -1,5 +1,7 @@
-import torch
+import pytest
 from PIL import Image
+
+torch = pytest.importorskip("torch", reason="Torch is an optional GPU dependency")
 
 from core.demographic_classifier import AGE_LABELS, FairFaceDemographicClassifier
 

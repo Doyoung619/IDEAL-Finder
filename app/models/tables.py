@@ -8,13 +8,19 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    JSON,
     LargeBinary,
     String,
     Text,
+    UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+
+JSON_DOCUMENT = JSON().with_variant(JSONB, "postgresql")
 
 
 def utc_now() -> datetime:
@@ -42,10 +48,34 @@ class Participant(Base):
     baseline_latent_path: Mapped[str | None] = mapped_column(Text)
     base_seed: Mapped[int] = mapped_column(Integer)
     config_snapshot_path: Mapped[str | None] = mapped_column(Text)
+    consent_version: Mapped[str | None] = mapped_column(String(32))
 
     blocks: Mapped[list["ExperimentBlock"]] = relationship(
         back_populates="participant", cascade="all, delete-orphan"
     )
+
+
+class ExperimentSession(Base):
+    __tablename__ = "experiment_sessions"
+
+    session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    participant_id: Mapped[str] = mapped_column(
+        ForeignKey("participants.participant_id"), unique=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    persona_completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(32), default="persona_complete", index=True)
+    schema_version: Mapped[str] = mapped_column(String(32))
+    app_version: Mapped[str] = mapped_column(String(64))
+    persona_condition: Mapped[dict] = mapped_column(JSON_DOCUMENT)
+    persona_data: Mapped[dict] = mapped_column(JSON_DOCUMENT)
+    theta_persona: Mapped[list] = mapped_column(JSON_DOCUMENT)
+    experiment_seed: Mapped[int] = mapped_column(Integer)
+    algorithm_order: Mapped[list] = mapped_column(JSON_DOCUMENT)
+    m_order: Mapped[list] = mapped_column(JSON_DOCUMENT)
+    user_agent: Mapped[str | None] = mapped_column(Text)
 
 
 class ScreenEvent(Base):
@@ -66,6 +96,9 @@ class ExperimentBlock(Base):
     block_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     participant_id: Mapped[str] = mapped_column(
         ForeignKey("participants.participant_id"), index=True
+    )
+    session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("experiment_sessions.session_id"), index=True
     )
     sequence_index: Mapped[int] = mapped_column(Integer)
     m_value: Mapped[int] = mapped_column(Integer)
@@ -114,6 +147,9 @@ class LatentImage(Base):
 
 class Selection(Base):
     __tablename__ = "selections"
+    __table_args__ = (
+        UniqueConstraint("block_id", "round_id", name="uq_selection_block_round"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     participant_id: Mapped[str] = mapped_column(
@@ -131,6 +167,63 @@ class Selection(Base):
     reaction_time_sec: Mapped[float] = mapped_column(Float)
     difficulty_rating: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ExperimentRound(Base):
+    __tablename__ = "experiment_rounds"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id", "block_id", "round_index", name="uq_session_block_round"
+        ),
+    )
+
+    round_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("experiment_sessions.session_id"), index=True
+    )
+    block_id: Mapped[str] = mapped_column(
+        ForeignKey("experiment_blocks.block_id"), index=True
+    )
+    round_index: Mapped[int] = mapped_column(Integer)
+    algorithm: Mapped[str] = mapped_column(String(32))
+    m_value: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(24), default="submitted", index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    answered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    response_time_ms: Mapped[int] = mapped_column(Integer)
+    query_points: Mapped[list] = mapped_column(JSON_DOCUMENT)
+    final_query_points: Mapped[list] = mapped_column(JSON_DOCUMENT)
+    generated_image_ids: Mapped[list] = mapped_column(JSON_DOCUMENT)
+    selected_index: Mapped[int] = mapped_column(Integer)
+    selected_image_id: Mapped[str] = mapped_column(ForeignKey("latent_images.image_id"))
+    selected_theta: Mapped[list] = mapped_column(JSON_DOCUMENT)
+    ideal_similarity_rating: Mapped[int] = mapped_column(Integer)
+    choice_difficulty_rating: Mapped[int] = mapped_column(Integer)
+    beta_before: Mapped[float | None] = mapped_column(Float)
+    beta_after: Mapped[float | None] = mapped_column(Float)
+    posterior_mean: Mapped[list | None] = mapped_column(JSON_DOCUMENT)
+    posterior_covariance: Mapped[list | None] = mapped_column(JSON_DOCUMENT)
+    effective_sample_size: Mapped[float | None] = mapped_column(Float)
+    expected_information_gain: Mapped[float | None] = mapped_column(Float)
+    random_seed: Mapped[int] = mapped_column(Integer)
+    query_metadata: Mapped[dict] = mapped_column(JSON_DOCUMENT)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ExperimentEvent(Base):
+    __tablename__ = "experiment_events"
+
+    event_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("experiment_sessions.session_id"), index=True
+    )
+    block_id: Mapped[str | None] = mapped_column(
+        ForeignKey("experiment_blocks.block_id"), index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(48), index=True)
+    event_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    payload: Mapped[dict] = mapped_column(JSON_DOCUMENT)
 
 
 class FaceRating(Base):

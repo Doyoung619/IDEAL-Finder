@@ -38,6 +38,10 @@ class CLIPRanker:
         self._tokenizer = None
         self._load_error: Exception | None = None
 
+    def ensure_ready(self) -> bool:
+        """Materialize the configured model for production startup validation."""
+        return self._ensure_loaded()
+
     def _ensure_loaded(self) -> bool:
         if not self.enabled or torch is None:
             if torch is None:

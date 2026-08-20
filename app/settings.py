@@ -78,6 +78,10 @@ def _running_on_vercel() -> bool:
     return _truthy(os.getenv("VERCEL")) or _truthy(os.getenv("IDEAL_SERVERLESS"))
 
 
+def _production_mode() -> bool:
+    return os.getenv("APP_ENV", "development").strip().lower() == "production"
+
+
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     result = copy.deepcopy(base)
     for key, value in override.items():
@@ -132,14 +136,50 @@ def load_config(
             values["demo"].get("persona_pool_minimum_usable_size", 8)
         )
 
-    if os.getenv("IDEAL_SECRET_KEY"):
-        values["app"]["secret_key"] = os.environ["IDEAL_SECRET_KEY"]
+    session_secret = os.getenv("SESSION_SECRET") or os.getenv("IDEAL_SECRET_KEY")
+    if session_secret:
+        values["app"]["secret_key"] = session_secret
+    if os.getenv("IDEAL_CONSENT_VERSION"):
+        values["app"]["consent_version"] = os.environ[
+            "IDEAL_CONSENT_VERSION"
+        ]
+    if os.getenv("IDEAL_SECURE_COOKIES"):
+        values["app"]["secure_cookies"] = _truthy(
+            os.getenv("IDEAL_SECURE_COOKIES")
+        )
     if os.getenv("IDEAL_DEBUG"):
         values["app"]["debug"] = _truthy(os.getenv("IDEAL_DEBUG"))
     if os.getenv("IDEAL_DATABASE_URL"):
         values["database"]["url"] = os.environ["IDEAL_DATABASE_URL"]
     if os.getenv("IDEAL_GENERATOR_MODE"):
         values["generator"]["mode"] = os.environ["IDEAL_GENERATOR_MODE"]
+    for key, env_name in (
+        ("stylegan_repo", "IDEAL_STYLEGAN_REPO"),
+        ("network_path", "IDEAL_STYLEGAN_NETWORK"),
+    ):
+        if os.getenv(env_name):
+            values["generator"][key] = os.environ[env_name]
+    for key, env_name in (
+        ("race_weights", "IDEAL_FAIRFACE_RACE_WEIGHTS"),
+        ("gender_weights", "IDEAL_FAIRFACE_GENDER_WEIGHTS"),
+        ("age_weights", "IDEAL_FAIRFACE_AGE_WEIGHTS"),
+    ):
+        if os.getenv(env_name):
+            values["demographic"][key] = os.environ[env_name]
+    if os.getenv("IDEAL_PRIOR_PATH"):
+        values["conditional_prior"]["artifact_path"] = os.environ[
+            "IDEAL_PRIOR_PATH"
+        ]
+    for key, env_name in (
+        ("female_pool", "IDEAL_PERSONA_FEMALE_POOL"),
+        ("male_pool", "IDEAL_PERSONA_MALE_POOL"),
+    ):
+        if os.getenv(env_name):
+            values["persona"][key] = os.environ[env_name]
+    if os.getenv("IDEAL_FACE_DETECTOR_PATH"):
+        values["persona_pool"]["face_detector_path"] = os.environ[
+            "IDEAL_FACE_DETECTOR_PATH"
+        ]
     if os.getenv("IDEAL_ARTIFACT_STORAGE"):
         values.setdefault("storage", {})["persist_artifacts_in_db"] = (
             os.environ["IDEAL_ARTIFACT_STORAGE"].lower() == "database"
@@ -195,15 +235,20 @@ def load_config(
         db_url = f"sqlite:///{_resolve_project_path(db_path)}"
     values["database"]["url"] = db_url
 
-    if serverless:
+    production = _production_mode()
+    if serverless or production:
         if values["app"]["secret_key"] == DEFAULT_SECRET_KEY:
             raise RuntimeError(
-                "IDEAL_SECRET_KEY must be set for serverless/Vercel deployments."
+                "SESSION_SECRET (or legacy IDEAL_SECRET_KEY) must be set in production."
             )
-        if values["database"]["url"].startswith("sqlite"):
+        values["app"]["secure_cookies"] = True
+        if (
+            os.getenv("APP_ROLE", "monolith").strip().lower() != "gateway"
+            and values["database"]["url"].startswith("sqlite")
+        ):
             raise RuntimeError(
                 "IDEAL_DATABASE_URL must point to an external database for "
-                "serverless/Vercel deployments."
+                "production GPU/monolith deployments."
             )
 
     for directory in values["paths"].values():

@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import pickle
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import (
     ExperimentBlock,
+    ExperimentRound,
     FaceRating,
     FinalSurvey,
     FinalRefinementEvaluation,
@@ -31,6 +35,16 @@ from app.services.generation_service import (
     update_block_after_selection,
 )
 from app.services.artifact_storage import image_bytes
+from app.services.artifact_storage import ensure_block_files
+from app.services.experiment_session_service import (
+    add_event,
+    complete_round_from_state,
+    create_experiment_session,
+    create_round_submission,
+    mark_round_error,
+    mark_session_completed,
+    session_for_participant,
+)
 from app.services.final_evaluation_service import (
     prepare_final_artifacts,
     save_final_evaluation,
@@ -73,6 +87,36 @@ CONDITION_LABELS = {
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _finalize_submitted_round(
+    db: Session,
+    runtime,
+    block: ExperimentBlock,
+    selection: Selection,
+    experiment_round: ExperimentRound,
+) -> None:
+    """Apply a choice at most once, then persist the resulting posterior snapshot."""
+    ensure_block_files(block)
+    with Path(block.strategy_state_path).open("rb") as handle:
+        state = pickle.load(handle)
+    applied_rounds = len(state.get("history", []))
+    if applied_rounds < experiment_round.round_index:
+        if applied_rounds != experiment_round.round_index - 1:
+            raise RuntimeError("Posterior history is not aligned with the submitted round")
+        update_block_after_selection(
+            db,
+            runtime,
+            block,
+            json_loads(selection.shown_image_ids, []),
+            selection.selected_image_id,
+            experiment_round.round_index,
+            preference_rating=experiment_round.ideal_similarity_rating,
+            difficulty_rating=experiment_round.choice_difficulty_rating,
+        )
+    elif applied_rounds > experiment_round.round_index:
+        raise RuntimeError("Posterior history is ahead of the submitted round")
+    complete_round_from_state(db, block, experiment_round)
 
 
 def redirect(url: str) -> RedirectResponse:
@@ -265,6 +309,7 @@ async def submit_persona(request: Request, db: Session = Depends(get_db)):
             answers,
             priorities,
             priority_multiplier=float(request.app.state.config.persona.priority_multiplier),
+            fixed_race=str(request.app.state.config.persona.fixed_race),
         )
     except PersonaValidationError as exc:
         return request.app.state.templates.TemplateResponse(
@@ -414,7 +459,7 @@ async def submit_persona_confirm(request: Request, db: Session = Depends(get_db)
         return redirect("/persona/candidates")
     form = await request.form()
     try:
-        confirm_persona_initialization(
+        initialization = confirm_persona_initialization(
             db,
             request.app.state.runtime,
             participant,
@@ -424,6 +469,18 @@ async def submit_persona_confirm(request: Request, db: Session = Depends(get_db)
         )
     except (PersonaValidationError, ValueError):
         return redirect("/persona/confirm")
+    profile = get_persona_profile(db, participant.participant_id)
+    if profile is None:
+        return redirect("/persona")
+    experiment_session = create_experiment_session(
+        db,
+        request.app.state.config,
+        participant,
+        initialization,
+        profile,
+        request.headers.get("user-agent"),
+    )
+    request.session["experiment_session_id"] = experiment_session.session_id
     exit_screen(db, participant.participant_id, "persona_confirm")
     return redirect("/experiment1/instructions?block=0")
 
@@ -484,28 +541,29 @@ async def start_experiment1(request: Request, db: Session = Depends(get_db)):
     order = m_order(participant)
     if block_index < 0 or block_index >= len(order):
         return redirect("/final-evaluation")
-    existing = find_block(db, participant, block_index)
-    if existing is None:
-        strategy_parameters = {
-            "condition_gender": (
-                participant.preferred_target_gender
-                if participant.preferred_target_gender in {"female", "male"}
-                else request.app.state.config.demographic.gender
-            ),
-            "condition_races": list(
-                request.app.state.config.demographic.race_targets
-            ),
-        }
-        get_or_create_block(
-            db,
-            request.app.state.runtime,
-            participant,
-            block_index,
-            strategy_mode=strategy_for_block(
-                request.app.state.config, participant, block_index
-            ),
-            strategy_parameters=strategy_parameters,
-        )
+    with request.app.state.runtime.generation_lock:
+        existing = find_block(db, participant, block_index)
+        if existing is None:
+            strategy_parameters = {
+                "condition_gender": (
+                    participant.preferred_target_gender
+                    if participant.preferred_target_gender in {"female", "male"}
+                    else request.app.state.config.demographic.gender
+                ),
+                "condition_races": list(
+                    request.app.state.config.demographic.race_targets
+                ),
+            }
+            get_or_create_block(
+                db,
+                request.app.state.runtime,
+                participant,
+                block_index,
+                strategy_mode=strategy_for_block(
+                    request.app.state.config, participant, block_index
+                ),
+                strategy_parameters=strategy_parameters,
+            )
     exit_screen(
         db,
         participant.participant_id,
@@ -532,15 +590,33 @@ def experiment1_round_page(
     experiment_block = find_block(db, participant, block)
     if experiment_block is None:
         return redirect(f"/experiment1/instructions?block={block}")
-    completed_rounds = db.scalar(
-        select(func.count(Selection.id)).where(
-            Selection.block_id == experiment_block.block_id
+    experiment_session = session_for_participant(db, participant.participant_id)
+    completed_rounds = (
+        db.scalar(
+            select(func.count(ExperimentRound.round_id)).where(
+                ExperimentRound.block_id == experiment_block.block_id,
+                ExperimentRound.status == "completed",
+            )
+        )
+        if experiment_session is not None
+        else db.scalar(
+            select(func.count(Selection.id)).where(
+                Selection.block_id == experiment_block.block_id
+            )
         )
     ) or 0
     total_rounds = request.app.state.config.experiment.rounds_per_m
     if completed_rounds >= total_rounds:
         if experiment_block.completed_at is None:
             experiment_block.completed_at = utc_now()
+            if experiment_session is not None:
+                add_event(
+                    db,
+                    experiment_session.session_id,
+                    "block_completed",
+                    block_id=experiment_block.block_id,
+                    payload={"block_index": experiment_block.sequence_index},
+                )
             db.commit()
         next_block = block + 1
         if next_block < len(order):
@@ -623,12 +699,23 @@ async def submit_experiment1_round(
     if request.app.state.config.persona.required and prerequisite:
         return redirect(prerequisite)
     form = await request.form()
-    block_index = int(form["block_index"])
-    round_id = int(form["round_id"])
-    selected_image_id = str(form.get("selected_image_id", ""))
-    preference_rating = int(form.get("preference_rating", 0))
-    difficulty = int(form.get("difficulty", 0))
-    reaction_time = max(0.0, float(form.get("reaction_time_sec", 0)))
+    try:
+        block_index = int(form["block_index"])
+        round_id = int(form["round_id"])
+        selected_image_id = str(form.get("selected_image_id", ""))
+        preference_rating = int(form.get("preference_rating", 0))
+        difficulty = int(form.get("difficulty", 0))
+        reaction_time = max(0.0, float(form.get("reaction_time_sec", 0)))
+    except (KeyError, TypeError, ValueError):
+        return redirect("/experiment1/instructions?block=0")
+    order = m_order(participant)
+    if (
+        not 0 <= block_index < len(order)
+        or not 1 <= round_id <= int(
+            request.app.state.config.experiment.rounds_per_m
+        )
+    ):
+        return redirect("/experiment1/instructions?block=0")
     block = find_block(db, participant, block_index)
     if block is None:
         return redirect(f"/experiment1/instructions?block={block_index}")
@@ -639,15 +726,43 @@ async def submit_experiment1_round(
         )
     )
     if existing is not None:
+        experiment_round = db.scalar(
+            select(ExperimentRound).where(
+                ExperimentRound.block_id == block.block_id,
+                ExperimentRound.round_index == round_id,
+            )
+        )
+        if experiment_round is not None and experiment_round.status != "completed":
+            try:
+                _finalize_submitted_round(
+                    db,
+                    request.app.state.runtime,
+                    block,
+                    existing,
+                    experiment_round,
+                )
+            except Exception as exc:  # recovery remains on the same round
+                mark_round_error(db, experiment_round, exc)
+        return redirect(f"/experiment1/round?block={block_index}")
+
+    completed_rounds = db.scalar(
+        select(func.count(ExperimentRound.round_id)).where(
+            ExperimentRound.block_id == block.block_id,
+            ExperimentRound.status == "completed",
+        )
+    ) or 0
+    if round_id != completed_rounds + 1:
         return redirect(f"/experiment1/round?block={block_index}")
 
     artifacts = list(
         db.scalars(
-            select(LatentImage).where(
+            select(LatentImage)
+            .where(
                 LatentImage.block_id == block.block_id,
                 LatentImage.round_id == round_id,
                 LatentImage.stage_type == "experiment1",
             )
+            .order_by(LatentImage.created_at)
         )
     )
     shown_ids = [artifact.image_id for artifact in artifacts]
@@ -679,17 +794,38 @@ async def submit_experiment1_round(
             condition_type=f"M={block.m_value}",
         )
     )
-    db.commit()
-    update_block_after_selection(
+    experiment_session = session_for_participant(db, participant.participant_id)
+    if experiment_session is None:
+        db.rollback()
+        return redirect("/persona/confirm")
+    experiment_round = create_round_submission(
         db,
         request.app.state.runtime,
+        experiment_session,
         block,
-        shown_ids,
-        selected_image_id,
         round_id,
-        preference_rating=preference_rating,
-        difficulty_rating=difficulty,
+        artifacts,
+        selected_image_id,
+        preference_rating,
+        difficulty,
+        reaction_time,
     )
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return redirect(f"/experiment1/round?block={block_index}")
+    try:
+        _finalize_submitted_round(
+            db,
+            request.app.state.runtime,
+            block,
+            selection,
+            experiment_round,
+        )
+    except Exception as exc:  # selection is durable; refresh safely retries it
+        mark_round_error(db, experiment_round, exc)
+        return redirect(f"/experiment1/round?block={block_index}")
     exit_screen(
         db,
         participant.participant_id,
@@ -1159,6 +1295,9 @@ async def submit_survey(request: Request, db: Session = Depends(get_db)):
         )
         participant.status = "completed"
         participant.completed_at = utc_now()
+        experiment_session = session_for_participant(db, participant.participant_id)
+        if experiment_session is not None:
+            mark_session_completed(db, experiment_session)
         db.commit()
         exit_screen(db, participant.participant_id, "final_survey")
     return redirect("/complete")

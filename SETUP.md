@@ -4,7 +4,7 @@
 
 ## 1. 저장소와 Python 환경
 
-권장 환경은 Linux, Python 3.10–3.12, CUDA가 동작하는 NVIDIA GPU입니다. 기본 연구 설정은 생성/CLIP에 `cuda:0`, FairFace 분류에 `cuda:1,2,3`을 사용합니다. GPU가 적으면 `configs/persona_study.yaml`의 `generator.device`, `clip.device`, `demographic.devices`를 실제 장치에 맞게 바꾸세요.
+기준 환경은 Linux, Python 3.10, CUDA가 동작하는 NVIDIA GPU입니다. 기본 연구 설정은 온라인 생성/CLIP에 `cuda:0`, offline FairFace 분류에 `cuda:1,2,3`을 사용합니다. GPU가 적으면 offline builder 실행 시 `demographic.devices`를 실제 장치에 맞게 별도 설정하되, 고정된 user-study config는 수집 직전에 수정하지 마세요.
 
 ```bash
 git clone https://github.com/Doyoung619/IDEAL-Finder.git
@@ -18,33 +18,37 @@ python -m pip install -r requirements.txt
 
 ## 2. 실제 연구에 필요한 외부 파일
 
-checkpoint와 생성된 pool은 크기 및 라이선스 문제로 Git에 포함하지 않습니다. 다음 파일을 준비한 뒤 `configs/persona_study.yaml`의 절대 경로를 현재 머신에 맞게 수정해야 합니다.
+checkpoint와 생성된 pool은 크기 및 라이선스 문제로 Git에 포함하지 않습니다.
+다음 파일을 준비한 뒤 `.env.gpu`의 환경변수에 현재 머신의 경로를
+지정합니다. 연구 config나 Python 코드를 서버별 절대 경로로 수정하지 않습니다.
 
-| 용도 | 설정 키 | 현재 서버 예시 |
+| 용도 | 환경변수 | 값 형식 |
 |---|---|---|
-| StyleGAN3 소스 | `generator.stylegan_repo` | `/data1/doyoung/Ideal/third_party/stylegan3` |
-| FFHQ StyleGAN3 pickle | `generator.network_path` | `/data1/doyoung/Ideal/checkpoints/stylegan3-r-ffhqu-256x256.pkl` |
-| FairFace race weights | `demographic.race_weights` | `/data1/doyoung/Ideal/checkpoints/fairface_race` |
-| FairFace gender weights | `demographic.gender_weights` | `/data1/doyoung/Ideal/checkpoints/fairface_gender` |
-| FairFace age weights | `demographic.age_weights` | `/data1/doyoung/Ideal/checkpoints/fairface_age` |
-| YuNet face detector | `persona_pool.face_detector_path` | `/data1/doyoung/Ideal/checkpoints/face_detection_yunet_2023mar.onnx` |
+| StyleGAN3 소스 | `IDEAL_STYLEGAN_REPO` | StyleGAN3 checkout directory |
+| FFHQ StyleGAN3 pickle | `IDEAL_STYLEGAN_NETWORK` | checkpoint file |
+| FairFace race weights | `IDEAL_FAIRFACE_RACE_WEIGHTS` | weights directory/file |
+| FairFace gender weights | `IDEAL_FAIRFACE_GENDER_WEIGHTS` | weights directory/file |
+| FairFace age weights | `IDEAL_FAIRFACE_AGE_WEIGHTS` | weights directory/file |
+| YuNet face detector | `IDEAL_FACE_DETECTOR_PATH` | ONNX file |
 
 아래 연구 artifact도 필요합니다.
 
 ```text
-artifacts/priors/female_20_29_d12.npz
-artifacts/priors/male_20_29_d12.npz
-artifacts/persona_pools/female_20_29_d12/pool.npz
-artifacts/persona_pools/female_20_29_d12/metadata.json
-artifacts/persona_pools/male_20_29_d12/pool.npz
-artifacts/persona_pools/male_20_29_d12/metadata.json
+artifacts/priors/female_20_29_east_asian_d12.npz
+artifacts/priors/male_20_29_east_asian_d12.npz
+artifacts/persona_pools/female_20_29_east_asian_d12/pool.npz
+artifacts/persona_pools/female_20_29_east_asian_d12/metadata.json
+artifacts/persona_pools/male_20_29_east_asian_d12/pool.npz
+artifacts/persona_pools/male_20_29_east_asian_d12/metadata.json
 ```
 
 기존 연구 서버의 artifact를 재사용할 수 있으면 디렉터리 구조를 보존해 복사하는 것이 가장 빠릅니다. 복사본이 없다면 3–4절의 builder로 생성하세요.
 
-## 3. 성별 + 20–29세 12D prior 생성
+## 3. 성별 + 20–29세 + East Asian 12D prior 생성
 
-인종 label은 acceptance에 사용하지 않습니다. 여성과 남성 prior를 각각 생성합니다.
+최종 연구 설정의 FairFace 성별, 20–29, East Asian operational threshold를
+적용해 여성과 남성 prior를 각각 생성합니다. 이 label은 참가자의 정체성을
+판정하는 용도로 사용하지 않습니다.
 
 ```bash
 source .venv/bin/activate
@@ -52,12 +56,12 @@ source .venv/bin/activate
 python scripts/build_gender_age_prior.py \
   --config configs/persona_study.yaml \
   --gender female --accepted 2500 \
-  --output artifacts/priors/female_20_29_d12.npz
+  --output artifacts/priors/female_20_29_east_asian_d12.npz
 
 python scripts/build_gender_age_prior.py \
   --config configs/persona_study.yaml \
   --gender male --accepted 2500 \
-  --output artifacts/priors/male_20_29_d12.npz
+  --output artifacts/priors/male_20_29_east_asian_d12.npz
 ```
 
 ## 4. Persona pool 생성 및 검증
@@ -70,13 +74,13 @@ mkdir -p logs
 nohup .venv/bin/python scripts/build_persona_pool.py \
   --config configs/persona_study.yaml \
   --gender female --target-size 1000 \
-  --output artifacts/persona_pools/female_20_29_d12 \
+  --output artifacts/persona_pools/female_20_29_east_asian_d12 \
   > logs/female_pool.log 2>&1 &
 
 nohup .venv/bin/python scripts/build_persona_pool.py \
   --config configs/persona_study.yaml \
   --gender male --target-size 1000 \
-  --output artifacts/persona_pools/male_20_29_d12 \
+  --output artifacts/persona_pools/male_20_29_east_asian_d12 \
   > logs/male_pool.log 2>&1 &
 ```
 
@@ -84,9 +88,9 @@ nohup .venv/bin/python scripts/build_persona_pool.py \
 
 ```bash
 .venv/bin/python scripts/validate_persona_pool.py \
-  artifacts/persona_pools/female_20_29_d12 --minimum-size 1000
+  artifacts/persona_pools/female_20_29_east_asian_d12 --minimum-size 1000
 .venv/bin/python scripts/validate_persona_pool.py \
-  artifacts/persona_pools/male_20_29_d12 --minimum-size 1000
+  artifacts/persona_pools/male_20_29_east_asian_d12 --minimum-size 1000
 ```
 
 ## 5. 실행 전 검사
@@ -160,4 +164,3 @@ bash scripts/run_demo.sh
 - `data/`, `outputs/`, checkpoint, prior, persona pool은 Git에 올라가지 않습니다.
 - `app.secret_key`는 실제 배포 전 반드시 예측 불가능한 값으로 변경하고 저장소에 커밋하지 마세요.
 - 진행 중인 연구에서 `search.version` 또는 schedule을 바꾸면 기존 세션과 새 세션을 섞지 마세요.
-

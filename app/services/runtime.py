@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 
 import numpy as np
 
@@ -63,6 +64,9 @@ class ExperimentRuntime:
         )
         self._conditional_priors = {}
         self._persona_pools = {}
+        # One process should own one GPU worker. This lock prevents overlapping
+        # StyleGAN/OpenCLIP batches from exhausting GPU memory.
+        self.generation_lock = threading.RLock()
 
     def ensure_ready(self) -> None:
         self.projector.ensure_fitted(
@@ -167,12 +171,16 @@ class ExperimentRuntime:
                 age_20_29_threshold=float(self.config.persona_pool.age_20_29_threshold),
                 minimum_quality=float(self.config.persona_pool.minimum_quality),
             )
+        condition_races = list(self.config.demographic.race_targets)
         if pool.theta_dimension != self.conditional_prior(
-            {"condition_gender": gender, "condition_races": []}
+            {"condition_gender": gender, "condition_races": condition_races}
         ).dimension:
             raise ValueError("Persona pool theta dimension does not match its prior")
         if pool.metadata.get("gender") not in {None, gender}:
             raise ValueError("Persona pool gender metadata does not match")
+        expected_population = str(self.config.persona.fixed_race)
+        if pool.metadata.get("fixed_race") not in {None, expected_population}:
+            raise ValueError("Persona pool population metadata does not match")
         self._persona_pools[gender] = pool
         return pool
 
@@ -192,8 +200,9 @@ class ExperimentRuntime:
         )
 
     def _build_demo_persona_pool(self, root: Path, gender: str) -> None:
+        condition_races = list(self.config.demographic.race_targets)
         prior = self.conditional_prior(
-            {"condition_gender": gender, "condition_races": []}
+            {"condition_gender": gender, "condition_races": condition_races}
         )
         size = max(
             int(self.config.persona_pool.target_size),
@@ -231,7 +240,7 @@ class ExperimentRuntime:
             metadata={
                 "pool_version": f"{gender}-demo-v1",
                 "gender": gender,
-                "fixed_race": "unrestricted",
+                "fixed_race": str(self.config.persona.fixed_race),
                 "fixed_age": "20_29",
                 "clip_backend": self.clip_ranker.backend,
                 "scientific_result": False,

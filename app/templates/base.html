@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
-  <script defer src="{{ url_for('static', path='app.js') }}"></script>
+  <link rel="stylesheet" href="/static/app.css">
+  <script defer src="/static/app.js"></script>
 </head>
 <body>
   <header class="site-header">
@@ -29,4 +29,3 @@
   {% block scripts %}{% endblock %}
 </body>
 </html>
-

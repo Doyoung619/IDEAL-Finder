@@ -2,7 +2,8 @@ import inspect
 
 import numpy as np
 import pytest
-import torch
+
+torch = pytest.importorskip("torch", reason="Torch is an optional GPU dependency")
 
 from app.settings import load_config
 from core.conditional_prior import ConditionalPCAPrior, DemographicCondition

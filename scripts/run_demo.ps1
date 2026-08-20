@@ -1,4 +1,4 @@
 $ErrorActionPreference = "Stop"
 $env:IDEAL_DEMO = "1"
+$env:APP_ROLE = "monolith"
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
-

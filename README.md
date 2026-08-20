@@ -2,6 +2,8 @@
 
 StyleGAN FFHQ 얼굴 latent에서 persona 기반 초기 얼굴을 고른 뒤 사용자의 반복 선택으로 이상형 preference point를 추정하는 연구 프로토타입입니다. 실험은 **Entropy Query**와 논문의 **RC-MLQ**를 같은 초기분포에서 비교합니다.
 
+최종 user-study 운영자는 먼저 [`docs/STUDY_RELEASE.md`](docs/STUDY_RELEASE.md)를 확인하세요. GPU 서버 담당자용 절차는 [`docs/GPU_SERVER_HANDOFF.md`](docs/GPU_SERVER_HANDOFF.md), 연구자 배포 순서는 [`docs/DEPLOYMENT_CHECKLIST.md`](docs/DEPLOYMENT_CHECKLIST.md), gateway 계약은 [`docs/GPU_API_CONTRACT.md`](docs/GPU_API_CONTRACT.md), 알고리즘 고정 근거는 [`docs/ALGORITHM_AUDIT.md`](docs/ALGORITHM_AUDIT.md)에 있습니다. 모델·artifact 구축을 포함한 일반 설정은 [SETUP.md](SETUP.md)를 참고하세요.
+
 ## 처음 실행하기
 
 실제 StyleGAN3 연구 환경의 checkpoint 배치, prior/pool 생성, 검증, 서버 실행 및 원격 접속 절차는 [SETUP.md](SETUP.md)에 순서대로 정리되어 있습니다.
@@ -69,7 +71,7 @@ $$
 
 ## Conditional Latent Prior
 
-동일한 StyleGAN3 FFHQ generator에서 얼굴을 생성하고 FairFace 성별 및 20–29 확률만 operational filter로 사용해 조건별 W latent mean과 PCA를 구축합니다. 인종 확률은 prior 학습이나 pool acceptance에 사용하지 않습니다.
+동일한 StyleGAN3 FFHQ generator에서 얼굴을 생성하고 FairFace 성별, 20–29, East Asian 확률을 operational filter로 사용해 조건별 W latent mean과 PCA를 구축합니다. 이 분류값은 참가자의 정체성을 판정하는 용도가 아니라 연구용 조건부 분포를 만드는 필터입니다.
 
 $$
 w(\theta,c)=\mu_c+U_{c,d}\operatorname{diag}(\sqrt{\lambda_{c,1}},\ldots,\sqrt{\lambda_{c,d}})\theta
@@ -81,10 +83,10 @@ $$
 python scripts/build_gender_age_prior.py \
   --config configs/persona_study.yaml \
   --gender female --accepted 2500 \
-  --output artifacts/priors/female_20_29_d12.npz
+  --output artifacts/priors/female_20_29_east_asian_d12.npz
 ```
 
-남성 prior는 `--gender male`과 `artifacts/priors/male_20_29_d12.npz`를 사용합니다.
+남성 prior는 `--gender male`과 `artifacts/priors/male_20_29_east_asian_d12.npz`를 사용합니다.
 
 ## Persona warm start
 
@@ -95,7 +97,7 @@ consent → basic_info → persona questionnaire → 8 persona candidates
 → confirmation → Entropy Query refinement → final evaluation → survey
 ```
 
-Persona 문항은 `persona_v1`로 버전 관리됩니다. 생성 대상은 인종 제한 없이 한 명의 20–29세 성인, 정면 또는 거의 정면인 실사형 초상으로 고정되며 기본 정보에서는 여성/남성 target만 고릅니다. 응답은 raw JSON, 한국어 요약, 영어 `base/full/category` prompt bundle로 함께 저장됩니다.
+Persona 문항은 `persona_v1`로 버전 관리됩니다. 최종 연구 설정의 생성 대상은 East Asian 조건을 통과한 한 명의 20–29세 성인, 정면 또는 거의 정면인 실사형 초상이며 기본 정보에서는 여성/남성 target을 고릅니다. 응답은 raw JSON, 한국어 요약, 영어 `base/full/category` prompt bundle로 함께 저장됩니다.
 
 후보는 global W sample을 사후 projection하지 않습니다. 성별 conditional 12D prior에서 직접
 
@@ -117,7 +119,7 @@ history = []
 
 ## Persona pool 구축
 
-Research pool은 성별별 1,000개 미만이면 웹 retrieval을 시작하지 않습니다. 인종 확률은 acceptance에 사용하지 않으며, 정확히 한 얼굴, 품질, target gender와 FairFace 20–29 확률을 통과한 항목만 저장합니다. Threshold는 실행 중 자동 완화되지 않습니다.
+Research pool은 성별별 1,000개 미만이면 웹 retrieval을 시작하지 않습니다. 정확히 한 얼굴, 품질, target gender, FairFace 20–29와 East Asian threshold를 통과한 항목만 저장합니다. Threshold는 실행 중 자동 완화되지 않습니다.
 
 Linux/macOS background 실행:
 
@@ -125,12 +127,12 @@ Linux/macOS background 실행:
 mkdir -p logs
 nohup python scripts/build_persona_pool.py \
   --gender female --target-size 1000 \
-  --output artifacts/persona_pools/female_20_29_d12 \
+  --output artifacts/persona_pools/female_20_29_east_asian_d12 \
   > logs/female_pool.log 2>&1 &
 
 nohup python scripts/build_persona_pool.py \
   --gender male --target-size 1000 \
-  --output artifacts/persona_pools/male_20_29_d12 \
+  --output artifacts/persona_pools/male_20_29_east_asian_d12 \
   > logs/male_pool.log 2>&1 &
 ```
 
@@ -139,7 +141,7 @@ Windows PowerShell:
 ```powershell
 New-Item -ItemType Directory -Force logs | Out-Null
 Start-Process python `
-  -ArgumentList "scripts/build_persona_pool.py --gender female --target-size 1000 --output artifacts/persona_pools/female_20_29_d12" `
+  -ArgumentList "scripts/build_persona_pool.py --gender female --target-size 1000 --output artifacts/persona_pools/female_20_29_east_asian_d12" `
   -RedirectStandardOutput "logs/female_pool.log" `
   -RedirectStandardError "logs/female_pool.err.log"
 ```
@@ -147,7 +149,7 @@ Start-Process python `
 Builder는 `pool_checkpoint.npz`와 config hash로 같은 실행만 resume하며 `progress.json`과 `progress.png`를 실제 처리량으로 매 batch 갱신합니다. 결과는 다음 명령으로 검사합니다.
 
 ```bash
-python scripts/validate_persona_pool.py artifacts/persona_pools/female_20_29_d12 --minimum-size 1000
+python scripts/validate_persona_pool.py artifacts/persona_pools/female_20_29_east_asian_d12 --minimum-size 1000
 ```
 
 `persona.require_real_clip: true`인 research mode에서는 OpenCLIP 또는 checkpoint 로드 실패 시 즉시 종료합니다. latent-hash/mock embedding은 `IDEAL_DEMO=1`, unit test, 또는 명시적인 builder `--mock`에서만 허용되며 scientific CLIP result로 기록되지 않습니다.
@@ -177,9 +179,9 @@ persona:
   mixture_particle_count: 8192
 ```
 
-RC-MLQ는 posterior covariance의 최대 고유벡터로 방향을 정하고, projected posterior quantile로 slate 모양을 만든 뒤 posterior 폭과 독립된 고정 물리 grid `r∈[0.2,6.0]`에서 exact EIG를 최대화합니다. 사용자가 입력한 선택 난이도와 이상형 근접도는 다음 라운드의 `beta`를 `[0.35,2.5]` 안에서 완만하게 조절하며, 값과 이력을 state/round artifact에 저장합니다. 논문의 fixed-beta 조건을 그대로 재현하려면 `query.adaptive_beta_enabled: false`로 끌 수 있습니다.
+RC-MLQ는 posterior covariance의 최대 고유벡터로 방향을 정하고, projected posterior quantile로 slate 모양을 만든 뒤 posterior 폭과 독립된 고정 물리 grid `r∈[0.2,6.0]`에서 exact EIG를 최대화합니다. adaptive-beta 기능은 일반 설정에서 사용할 수 있지만, 최종 user-study 설정은 audit 결과에 따라 `beta: 1.0`, `adaptive_beta_enabled: false`로 고정합니다. 선택 난이도와 이상형 근접도 응답은 분석을 위해 계속 저장되며 다음 라운드의 beta를 바꾸지 않습니다.
 
-Persona-only 연구 설정은 별도 파일로 제공됩니다. 참가자별로 `M=8,4,2` 순서를 균형 랜덤화하고, 각 M 안에서도 `Entropy/RC-MLQ` 선후를 독립적으로 균형 랜덤화해 총 6개 블록을 실행합니다. 각 블록은 12라운드입니다. 기존 answer-key와 recommendation-condition 순회는 끕니다. 실제 StyleGAN3, 인종 제한 없는 성별별 20–29세 조건부 prior, FairFace ViT, YuNet, OpenAI CLIP을 사용합니다.
+Persona-only 연구 설정은 별도 파일로 제공됩니다. 참가자별로 `M=8,4,2` 순서를 균형 랜덤화하고, 각 M 안에서도 `Entropy/RC-MLQ` 선후를 독립적으로 균형 랜덤화해 총 6개 블록을 실행합니다. 각 블록은 12라운드입니다. 기존 answer-key와 recommendation-condition 순회는 끕니다. 실제 StyleGAN3, East Asian 조건의 성별별 20–29세 conditional prior, FairFace ViT, YuNet, OpenAI CLIP을 사용합니다.
 
 ```bash
 bash scripts/run_persona_study.sh
@@ -212,22 +214,130 @@ bash scripts/run_dev.sh
 
 웹 앱은 `http://127.0.0.1:8000`에서 실행됩니다. 실제 persona 연구에는 위 `configs/persona_study.yaml`을 사용하세요. 블록 순서는 participant ID와 study seed로 재현 가능한 균형 랜덤 schedule이며, 라운드 소요 시간은 참가자 화면에 표시하지 않습니다.
 
-## Vercel Demo Deployment
+## Production data collection
 
-Vercel 무료 플랜 배포는 실제 StyleGAN2-ADA/CLIP checkpoint를 서버리스 함수에 올리는 연구 실행 경로가 아니라, 앱 흐름 검증용 demo generator를 대상으로 합니다. Vercel에서는 `index.py`가 FastAPI 앱을 export하고, `requirements-vercel.txt`만 설치해 함수 번들에서 `torch`, `open_clip_torch`, checkpoint, run output을 제외합니다.
+연구 운영은 Vercel 함수에 StyleGAN/Torch/CUDA를 올리지 않고, 실제 모델과 기존 FastAPI 연구 로직을 GPU 서버의 단일 worker에 둡니다. PostgreSQL이 canonical storage이며 CSV는 분석용 export입니다.
 
-필수 환경변수는 다음과 같습니다.
-
-```bash
-IDEAL_SECRET_KEY="long-random-secret"
-IDEAL_ADMIN_PASSWORD="separate-admin-password"
-IDEAL_DATABASE_URL="postgresql+psycopg://USER:PASSWORD@HOST:PORT/DATABASE?sslmode=require"
-IDEAL_DEMO=1
-IDEAL_ARTIFACT_STORAGE=database
-IDEAL_DB_POOL=serverless
+```text
+Participant browser
+        |
+        v
+Vercel public gateway
+        |
+        v
+GPU FastAPI (1 worker) ---- PostgreSQL
+        |
+        +---- StyleGAN3 / OpenCLIP / FairFace
 ```
 
-Vercel에서는 generated image/latent/state artifact를 외부 DB에 함께 저장하고 요청 시 `/tmp` scratch directory로 복원합니다. `/admin`은 `IDEAL_ADMIN_PASSWORD`가 있으면 HTTP Basic 사용자명 `admin`으로 보호되며, Vercel에서 password가 없으면 노출되지 않습니다. 로컬 연구 실행에서는 기본값 그대로 filesystem artifact를 사용합니다.
+GPU generation은 process 내 lock으로 직렬화됩니다. 따라서 운영 시 `uvicorn --workers 1`을 유지하고, 수평 확장이 필요하면 GPU worker/queue를 별도로 늘려야 합니다. mutable posterior, beta, round history, 이미지는 participant/block별 경로와 DB row로 분리됩니다.
+
+### Database setup
+
+새 PostgreSQL DB에는 app과 같은 Python 환경에서 현재 schema를 생성합니다.
+
+```bash
+export IDEAL_DATABASE_URL='postgresql://USER:PASSWORD@HOST:5432/DATABASE?sslmode=require'
+python scripts/init_database.py --config configs/persona_study.yaml
+```
+
+기존 IDEAL-Finder DB를 upgrade할 때는 반드시 backup 후 versioned migration을 적용합니다. 기존 `selections` 중 `(block_id, round_id)` 중복이 있으면 migration이 중단되므로 연구자가 먼저 확인해야 합니다.
+
+```bash
+psql 'postgresql://USER:PASSWORD@HOST:5432/DATABASE?sslmode=require' \
+  -v ON_ERROR_STOP=1 \
+  -f migrations/001_experiment_persistence.sql
+```
+
+새로 추가된 핵심 table은 다음과 같습니다.
+
+- `experiment_sessions`: Persona 최종 확정 후에만 생성되는 전체 실험 단위
+- `experiment_blocks`: 기존 6개 M×algorithm block과 session의 연결
+- `experiment_rounds`: 선택, final query, rating, beta, posterior summary를 담는 라운드 단위 row
+- `experiment_events`: session/block/query/choice/completion/recovery event
+
+`latent_images.image_data`, `latent_data`, `experiment_blocks.strategy_state_data`는 production에서 정확히 본 PNG, W latent, 현재 particle posterior state를 PostgreSQL `BYTEA`로 보존합니다. 작은–중간 규모 실험에서 별도 object storage 의존성을 추가하지 않기 위한 최소 변경입니다. DB 크기가 운영 한계에 도달하면 이 컬럼만 object storage key로 교체하세요.
+
+### Experiment lifecycle and recovery
+
+Persona questionnaire와 8개 후보 선택만으로는 session이 생성되지 않습니다. Persona 얼굴 최종 확정 시 `experiment_sessions` row와 `session_created` event가 commit됩니다. 각 선택 POST는 다음 순서로 처리됩니다.
+
+```text
+server validates displayed image + expected round
+-> Selection / FaceRating / ExperimentRound(status=submitted) COMMIT
+-> existing Bayesian update runs unchanged
+-> posterior snapshot + status=completed COMMIT
+-> redirect to next round
+```
+
+첫 commit 후 posterior update가 실패하면 선택은 이미 DB에 남고 round는 `error`로 표시됩니다. 새로고침/재제출 시 state history 길이를 확인해 Bayesian update를 한 번만 적용합니다. `(block_id, round_id)`와 `(session_id, block_id, round_index)` unique constraint가 중복 저장을 막습니다. 서명된 session cookie가 opaque participant/session ID를 보관하므로 새로고침 후 completed round 다음으로 복구됩니다.
+
+### Environment variables
+
+split deployment에서는 Vercel용 `.env.gateway.example`과 GPU 서버용
+`.env.gpu.example`을 사용하고 실제 secret이나 DB URL을 Git에 commit하지
+마세요. 핵심 변수는 다음과 같습니다.
+
+- `IDEAL_DATABASE_URL`: 일반 PostgreSQL connection string
+- `SESSION_SECRET`: 참가자 session cookie 서명 key (`IDEAL_SECRET_KEY`는 호환 alias)
+- `GPU_GATEWAY_SECRET`: Vercel→GPU 요청 전용 shared secret
+- `GPU_BACKEND_URL`: Vercel에서만 사용하는 GPU HTTPS base URL
+- `IDEAL_ADMIN_PASSWORD`: `/admin`/export Basic Auth password
+- `IDEAL_CONFIG`: 연구 운영은 `configs/persona_study.yaml`
+- `IDEAL_ARTIFACT_STORAGE=database`: exact image/latent/posterior state DB 보존
+- `IDEAL_STYLEGAN_*`, `IDEAL_FAIRFACE_*`, `IDEAL_PRIOR_PATH`, `IDEAL_PERSONA_*`: GPU host artifact 경로 override
+- `IDEAL_CONSENT_VERSION`, `IDEAL_APP_VERSION`: 세션에 남길 protocol/release 버전
+
+### GPU server
+
+GPU host에 repository, model, prior, Persona pool을 배치하고 `.env.gpu`의
+경로를 해당 host에 맞게 설정한 뒤 실행합니다. 자세한 전달용 절차는
+[`docs/GPU_SERVER_HANDOFF.md`](docs/GPU_SERVER_HANDOFF.md)에 있습니다.
+
+```bash
+cp .env.gpu.example .env.gpu
+./scripts/run_gpu_backend.sh
+```
+
+프로세스는 인증된 `/internal/v1/health`에서 app/DB/CUDA/model 상태를
+노출하며 secret이나 path는 반환하지 않습니다. GPU 서버를 재시작해도 DB
+BLOB에서 block state와 generated artifact를 scratch path로 복원합니다.
+
+### Status and CSV export
+
+```bash
+python scripts/experiment_status.py --config configs/persona_study.yaml
+python scripts/export_experiment_data.py \
+  --config configs/persona_study.yaml \
+  --output outputs/exports/study.zip
+```
+
+ZIP에는 normalized raw table CSV와 라운드당 한 행인 `rounds_flat.csv`/`analysis_rounds.csv`가 함께 들어갑니다. export는 민감한 연구 자료로 취급하고 암호화된 저장소에 두세요.
+DB의 binary image/latent/state 본문은 CSV에 복제하지 않고 byte size만 표시합니다.
+
+### Vercel deployment boundary
+
+`torch`, CUDA, StyleGAN3 checkpoint, OpenCLIP/FairFace는 Vercel에서 실행하지
+않습니다. production Vercel은 신뢰할 수 있는 HTTPS GPU endpoint로만 요청을
+전달하는 public gateway입니다. 기존 local/demo monolith 실행은
+`app.main:app` entrypoint로 계속 지원합니다.
+
+`index.py`는 이제 `APP_ROLE=gateway`를 기본으로 하며 `app.gateway`만 import합니다.
+`requirements-vercel.txt`에는 FastAPI와 HTTP client만 있고, `.vercelignore`가
+deployment upload를 줄이며 `vercel.json`의 `excludeFiles`가 model/DB/research
+tree를 Python function bundle에서 제외합니다. CSS/JavaScript는 gateway가
+직접 제공하며, 동적 HTML/form은 같은 public origin에서 GPU 앱으로 전달합니다.
+gateway는 브라우저의 기존
+form/cookie/redirect를 그대로 GPU 앱으로 전달하고 secret header를 server-side로
+추가합니다. API 세부 계약은
+[`docs/GPU_API_CONTRACT.md`](docs/GPU_API_CONTRACT.md), 연구자 순서는
+[`docs/DEPLOYMENT_CHECKLIST.md`](docs/DEPLOYMENT_CHECKLIST.md)를 참고하세요.
+
+실제 GPU 없이 전체 경로를 확인하려면 다음 한 명령을 실행합니다.
+
+```bash
+./scripts/run_local_fullstack.sh
+```
 
 ## Entropy Demo
 

@@ -1,5 +1,8 @@
 from app.models.tables import (
     ExperimentBlock,
+    ExperimentEvent,
+    ExperimentRound,
+    ExperimentSession,
     FaceRating,
     FinalSurvey,
     FinalRefinementEvaluation,
@@ -16,6 +19,9 @@ from app.models.tables import (
 
 __all__ = [
     "ExperimentBlock",
+    "ExperimentEvent",
+    "ExperimentRound",
+    "ExperimentSession",
     "FaceRating",
     "FinalSurvey",
     "FinalRefinementEvaluation",

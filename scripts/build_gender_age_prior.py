@@ -21,7 +21,7 @@ from core.generator import create_generator
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build a race-unrestricted gender + FairFace age 20-29 PCA prior."
+        description="Build a gender + age 20-29 + configured population PCA prior."
     )
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "configs/persona_study.yaml")
     parser.add_argument("--gender", choices=("female", "male"), required=True)
@@ -31,6 +31,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--gender-threshold", type=float, default=0.80)
     parser.add_argument("--age-threshold", type=float, default=0.55)
+    parser.add_argument("--race-threshold", type=float)
     parser.add_argument("--dimension", type=int, default=12)
     parser.add_argument("--coordinate-clip", type=float, default=1.5)
     parser.add_argument("--sampling-scale", type=float, default=0.75)
@@ -47,6 +48,13 @@ def main() -> None:
         batch_size=args.batch_size,
     )
     gender_index = 1 if args.gender == "female" else 0
+    race_targets = tuple(config.demographic.race_targets)
+    race_indices = [classifier.race_labels.index(value) for value in race_targets]
+    race_threshold = float(
+        args.race_threshold
+        if args.race_threshold is not None
+        else config.demographic.race_threshold
+    )
     random = np.random.default_rng(args.seed)
     selected: list[np.ndarray] = []
     generated = 0
@@ -60,9 +68,15 @@ def main() -> None:
         probabilities = classifier.predict_proba(images)
         gender_probability = probabilities["gender"][:, gender_index].numpy()
         age_20_29_probability = probabilities["age"][:, 3].numpy()
+        race_probability = (
+            probabilities["race"][:, race_indices].sum(dim=1).numpy()
+            if race_indices
+            else np.ones(count, dtype=np.float32)
+        )
         mask = (
             (gender_probability >= args.gender_threshold)
             & (age_20_29_probability >= args.age_threshold)
+            & (race_probability >= race_threshold)
         )
         if np.any(mask):
             selected.append(np.asarray(w[mask], dtype=np.float32))
@@ -87,7 +101,7 @@ def main() -> None:
         random_state=args.seed,
     ).fit(values)
     prior = ConditionalPCAPrior(
-        condition=DemographicCondition(args.gender, ()),
+        condition=DemographicCondition(args.gender, race_targets),
         mu_w=pca.mean_,
         components=pca.components_,
         eigenvalues=pca.explained_variance_,
@@ -96,12 +110,16 @@ def main() -> None:
         thresholds={
             "gender": args.gender_threshold,
             "age_20_29": args.age_threshold,
+            "race": race_threshold,
         },
         generator_metadata={
             "name": generator.generator_name,
             "checkpoint": str(config.generator.network_path),
             "frozen": True,
-            "target_definition": f"{args.gender}, any race, FairFace age 20-29",
+            "target_definition": (
+                f"{args.gender}, {','.join(race_targets) or 'unrestricted'}, "
+                "FairFace age 20-29"
+            ),
             "generated_samples": generated,
         },
         seed=args.seed,
@@ -110,7 +128,8 @@ def main() -> None:
     )
     prior.save(args.output)
     print(
-        f"Saved {args.dimension}D {args.gender} + age 20-29, race-unrestricted prior "
+        f"Saved {args.dimension}D {args.gender} + age 20-29 + "
+        f"{','.join(race_targets) or 'unrestricted'} prior "
         f"to {args.output}",
         flush=True,
     )

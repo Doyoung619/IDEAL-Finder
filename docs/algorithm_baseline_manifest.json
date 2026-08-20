@@ -1,0 +1,17 @@
+{
+  "algorithm_manifest_sha256": "12399223b39c4fc1d78b37412ec3ea361cca570044e6c0f9f1cc2f9885f3d14d",
+  "algorithm_version": "rc_mlq_v4_randomized_entropy_spread14",
+  "commit": "997a437dbdab80211ea7eb12e908ecadf151c31d",
+  "files": {
+    "app/services/generation_service.py": "3ea6913aecda7f5ee5047d7fb1ded1e55c11b05e6401c74877f1316cbf6c91c8",
+    "app/services/runtime.py": "cd9b7b1baeaa6ddf6a31270dedd5a9b748ee3e4da771960b4b8765501e31d1b5",
+    "configs/default.yaml": "3ec97f6cc96ba5af658628c5eda76f41f9f228a112636e39c1e20c836d67835f",
+    "configs/persona_study.yaml": "114ccb1e8251fafe22fe9ac558e05f346d748109b296c600bf8d9b121d778a79",
+    "core/conditional_prior.py": "a9b0b3ba56aad1f976df22118d884939cbdd53ca6a541e474dd0b0b27e5e4fa8",
+    "core/entropy_query.py": "7fd9281d22851ffdc1bda0e533a88af0fcb37da217cd2847ac4c6985571b38b3",
+    "core/preference_posterior.py": "c36ef355909754e732beed6c106f862bea3d39fad009d6260cc5dd747db98229",
+    "core/query_diversity.py": "f7b34bfe47da407a0f5fc480af23f5602edde9567a50d527adf65ac321221469",
+    "core/query_strategy.py": "85b71cddd2e67fd27d53d5d94f16938541a9974cbdd3fcf239c0accfd06661c3",
+    "core/rc_mlq.py": "8d2da5ba7263b118657612e81f168e3edfd7620afb09bc8223f6a819e0598bc9"
+  }
+}

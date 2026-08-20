@@ -13,14 +13,15 @@ else
 fi
 
 export IDEAL_CONFIG="${IDEAL_CONFIG:-configs/persona_study.yaml}"
+export APP_ROLE=monolith
 host="${IDEAL_HOST:-0.0.0.0}"
 port="${IDEAL_PORT:-8000}"
 
 "$python_bin" scripts/validate_persona_pool.py \
-  artifacts/persona_pools/female_20_29_d12 \
+  "${IDEAL_PERSONA_FEMALE_POOL:-artifacts/persona_pools/female_20_29_east_asian_d12}" \
   --minimum-size 1000
 "$python_bin" scripts/validate_persona_pool.py \
-  artifacts/persona_pools/male_20_29_d12 \
+  "${IDEAL_PERSONA_MALE_POOL:-artifacts/persona_pools/male_20_29_east_asian_d12}" \
   --minimum-size 1000
 "$python_bin" scripts/invalidate_legacy_sessions.py
 

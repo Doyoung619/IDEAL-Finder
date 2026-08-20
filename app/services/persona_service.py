@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -19,7 +21,14 @@ from app.models import (
     PersonaInitialization,
     PersonaProfile,
 )
+from app.services.artifact_storage import (
+    array_to_npy_bytes,
+    persist_artifacts_in_db,
+)
 from experiments.design import stable_seed
+
+
+logger = logging.getLogger("ideal_finder.persona")
 
 
 PERSONA_SCHEMA_VERSION = "persona_v1"
@@ -258,6 +267,7 @@ def build_persona_prompt_bundle(
     answers: Mapping[str, Sequence[str]],
     priorities: Sequence[str],
     priority_multiplier: float = 2.0,
+    fixed_race: str = FIXED_RACE,
 ) -> PersonaPromptBundle:
     validated = validate_persona_profile(target_gender, answers, priorities)
     noun = "woman" if target_gender == "female" else "man"
@@ -306,7 +316,7 @@ def build_persona_prompt_bundle(
     raw_profile = {
         "schema_version": PERSONA_SCHEMA_VERSION,
         "target_gender": target_gender,
-        "fixed_race": FIXED_RACE,
+        "fixed_race": fixed_race,
         "fixed_age": FIXED_AGE,
         "answers": {
             category.key: validated[category.key]
@@ -390,7 +400,7 @@ def save_persona_profile(
             participant_id=participant.participant_id,
             schema_version=bundle.schema_version,
             target_gender=bundle.target_gender,
-            fixed_race=FIXED_RACE,
+            fixed_race=str(bundle.raw_profile["fixed_race"]),
             fixed_age_range=FIXED_AGE,
             responses_json="{}",
             priorities_json="[]",
@@ -401,7 +411,7 @@ def save_persona_profile(
         db.add(profile)
     profile.schema_version = bundle.schema_version
     profile.target_gender = bundle.target_gender
-    profile.fixed_race = FIXED_RACE
+    profile.fixed_race = str(bundle.raw_profile["fixed_race"])
     profile.fixed_age_range = FIXED_AGE
     profile.responses_json = json.dumps(
         bundle.raw_profile["answers"], ensure_ascii=False, sort_keys=True
@@ -437,6 +447,7 @@ def get_or_create_candidate_batch(
     participant: Participant,
     profile: PersonaProfile,
 ) -> tuple[PersonaCandidateBatch, list[LatentImage]]:
+    started = time.perf_counter()
     open_batch = db.scalar(
         select(PersonaCandidateBatch)
         .where(
@@ -516,7 +527,17 @@ def get_or_create_candidate_batch(
             stage_type="persona_candidate",
             batch_id=batch_id,
             latent_path=str(w_path),
+            latent_data=(
+                array_to_npy_bytes(pool.w[pool_index])
+                if persist_artifacts_in_db(runtime.config)
+                else None
+            ),
             image_path=str(image_path),
+            image_data=(
+                image_path.read_bytes()
+                if persist_artifacts_in_db(runtime.config)
+                else None
+            ),
             generator_type=runtime.generator.generator_name,
             generator_seed=int(pool.generator_seed[pool_index]),
             gender_target=profile.target_gender,
@@ -545,6 +566,13 @@ def get_or_create_candidate_batch(
     db.add(batch)
     participant.status = "persona_candidates_presented"
     db.commit()
+    logger.info(
+        "persona_latency participant_id=%s candidate_count=%s "
+        "total_request_latency_ms=%.1f",
+        participant.participant_id,
+        len(artifacts),
+        (time.perf_counter() - started) * 1000.0,
+    )
     return batch, artifacts
 
 

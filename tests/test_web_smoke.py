@@ -28,6 +28,13 @@ def test_demo_flow_reaches_first_generated_round(tmp_path):
     app = create_app(config)
 
     with TestClient(app) as client:
+        health = client.get("/api/health")
+        assert health.status_code == 200
+        assert health.json() == {
+            "status": "ok",
+            "database": "ok",
+            "generation_mode": "demo",
+        }
         response = client.get("/")
         assert response.status_code == 200
         assert "동의하고 시작하기" in response.text

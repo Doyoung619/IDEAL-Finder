@@ -8,7 +8,7 @@ from core.generator import DemoFaceGenerator
 from core.query_strategy import EntropyQueryStrategy
 
 
-def make_strategy(required=True):
+def make_strategy(required=True, adaptive_beta_enabled=True):
     prior = ConditionalPCAPrior(
         condition=DemographicCondition("female", ("east_asian",)),
         mu_w=np.zeros(4),
@@ -29,6 +29,7 @@ def make_strategy(required=True):
             "seed": 1,
             "device": "cpu",
             "warm_start_required": required,
+            "adaptive_beta_enabled": adaptive_beta_enabled,
         },
     )
 
@@ -62,3 +63,11 @@ def test_required_strategy_never_silently_initializes_at_demographic_mean(tmp_pa
             state_path=str(tmp_path / "missing.pkl"),
             display_count=5,
         )
+
+
+def test_recommended_fixed_beta_mode_ignores_ratings_deterministically():
+    strategy = make_strategy(adaptive_beta_enabled=False)
+    first = strategy._adapt_beta(1.0, preference_rating=10, difficulty_rating=1)
+    second = strategy._adapt_beta(1.0, preference_rating=1, difficulty_rating=7)
+    assert first == 1.0
+    assert second == 1.0

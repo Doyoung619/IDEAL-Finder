@@ -137,10 +137,14 @@ def main() -> None:
     if target < 1 or max_generated < target or batch_size < 1:
         raise ValueError("target, max-generated, and batch-size must be positive and consistent")
     output = args.output.resolve()
+    race_targets = tuple(config.demographic.race_targets)
+    population = str(config.persona.fixed_race)
     images_dir = output / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
     settings = {
         "gender": args.gender,
+        "population": population,
+        "race_targets": list(race_targets),
         "target": target,
         "max_generated": max_generated,
         "batch_size": batch_size,
@@ -153,7 +157,7 @@ def main() -> None:
         "generator_mode": str(config.generator.mode),
         "generator_checkpoint": str(config.generator.network_path),
         "prior_path": str(config.conditional_prior.artifact_path).format(
-            gender=args.gender, race="unrestricted"
+            gender=args.gender, race="_".join(race_targets)
         ),
         "clip_model": str(config.clip.model_name),
         "clip_pretrained": str(config.clip.pretrained),
@@ -172,7 +176,7 @@ def main() -> None:
     _atomic_json(metadata_path, {"config_hash": settings_hash, **settings})
 
     prior_path = str(config.conditional_prior.artifact_path).format(
-        gender=args.gender, race="unrestricted"
+        gender=args.gender, race="_".join(race_targets)
     )
     if args.mock:
         generator = DemoFaceGenerator(
@@ -182,7 +186,7 @@ def main() -> None:
         )
         dimension = min(int(config.conditional_prior.dimension), generator.latent_dim)
         prior = ConditionalPCAPrior(
-            condition=DemographicCondition(args.gender, ()),
+            condition=DemographicCondition(args.gender, race_targets),
             mu_w=np.zeros(generator.latent_dim),
             components=np.eye(generator.latent_dim)[:dimension],
             eigenvalues=np.ones(dimension),
@@ -194,6 +198,12 @@ def main() -> None:
     else:
         generator = create_generator(config)
         prior = ConditionalPCAPrior.load(prior_path)
+        expected_condition = DemographicCondition(args.gender, race_targets)
+        if prior.condition != expected_condition:
+            raise RuntimeError(
+                f"Prior condition {prior.condition} does not match "
+                f"requested {expected_condition}"
+            )
         if str(config.demographic.classifier) == "fairface_vit_triplet":
             classifier = FairFaceViTDemographicClassifier(
                 config.demographic.race_weights,
@@ -325,7 +335,7 @@ def main() -> None:
         metadata={
             "pool_version": version,
             "gender": args.gender,
-            "fixed_race": "unrestricted",
+            "fixed_race": population,
             "fixed_age": "20_29",
             "config_hash": settings_hash,
             "clip_backend": clip.backend,

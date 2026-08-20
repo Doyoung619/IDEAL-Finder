@@ -66,6 +66,12 @@ def _migrate_sqlite_schema(engine: Engine) -> None:
                     "ADD COLUMN preferred_age_appearance VARCHAR(32)"
                 )
             )
+    _add_sqlite_column_if_missing(
+        engine,
+        "participants",
+        "consent_version",
+        "ALTER TABLE participants ADD COLUMN consent_version VARCHAR(32)",
+    )
     columns = {
         column["name"] for column in inspect(engine).get_columns("experiment_blocks")
     }
@@ -77,6 +83,12 @@ def _migrate_sqlite_schema(engine: Engine) -> None:
                     "ADD COLUMN strategy_parameters_json TEXT NOT NULL DEFAULT '{}'"
                 )
             )
+    _add_sqlite_column_if_missing(
+        engine,
+        "experiment_blocks",
+        "session_id",
+        "ALTER TABLE experiment_blocks ADD COLUMN session_id VARCHAR(36)",
+    )
     _add_sqlite_column_if_missing(
         engine,
         "experiment_blocks",
@@ -101,6 +113,13 @@ def _migrate_sqlite_schema(engine: Engine) -> None:
         "image_data",
         "ALTER TABLE latent_images ADD COLUMN image_data BLOB",
     )
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_selection_block_round "
+                "ON selections(block_id, round_id)"
+            )
+        )
 
 
 def _add_sqlite_column_if_missing(

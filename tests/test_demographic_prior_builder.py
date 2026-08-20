@@ -1,4 +1,7 @@
 import numpy as np
+import pytest
+
+pytest.importorskip("torch", reason="Torch is an optional GPU dependency")
 
 from core.conditional_prior import DemographicCondition
 from core.demographic_prior_builder import (

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import uuid
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,7 +18,9 @@ def utc_now() -> datetime:
 
 
 def create_participant(db: Session, config) -> Participant:
-    participant_id = f"ITD-{uuid.uuid4().hex[:8].upper()}"
+    # 96 bits of entropy while retaining compatibility with the existing
+    # VARCHAR(16) participant key used by deployed databases.
+    participant_id = secrets.token_urlsafe(12)
     base_seed = int(config.experiment.seed)
     schedule = experiment_schedule(config, participant_id, base_seed)
     m_values = [item["m"] for item in schedule]
@@ -43,6 +45,7 @@ def create_participant(db: Session, config) -> Participant:
         recommendation_condition_order=json_dumps(recommendation_order),
         base_seed=base_seed,
         config_snapshot_path=str(snapshot_path),
+        consent_version=str(config.app.consent_version),
     )
     db.add(participant)
     db.commit()

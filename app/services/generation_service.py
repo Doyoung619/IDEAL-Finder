@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
+import pickle
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -28,12 +31,21 @@ from app.services.artifact_storage import (
     sync_block_files,
 )
 from app.services.participant_service import m_order
+from app.services.experiment_session_service import (
+    add_event,
+    mark_session_started,
+    session_for_participant,
+)
 from app.services.profile_service import build_profile_prompt
 from core.latent_sampler import farthest_point_sampling
 from core.preference_model import PairwisePreferenceModel
+from core.query_diversity import QueryDiversityConfig, ensure_query_diversity
 from core.utils import latent_fingerprint
 from experiments.design import stable_seed
 from experiments.logging_utils import json_dumps, json_loads
+
+
+logger = logging.getLogger("ideal_finder.generation")
 
 
 def utc_now() -> datetime:
@@ -157,9 +169,25 @@ def get_or_create_block(
         raise RuntimeError(
             "Persona warm start is required before the experiment can begin."
         )
+    experiment_session = session_for_participant(db, participant.participant_id)
     if initialization is not None:
-        initial_theta = np.asarray(np.load(initialization.theta_path), dtype=np.float32)
-        baseline = np.asarray(np.load(initialization.w_path), dtype=np.float32)
+        if Path(initialization.theta_path).exists():
+            initial_theta = np.asarray(
+                np.load(initialization.theta_path), dtype=np.float32
+            )
+        elif experiment_session is not None:
+            initial_theta = np.asarray(
+                experiment_session.theta_persona, dtype=np.float32
+            )
+        else:
+            raise FileNotFoundError("Persona theta artifact is unavailable")
+        if Path(initialization.w_path).exists():
+            baseline = np.asarray(np.load(initialization.w_path), dtype=np.float32)
+        else:
+            selected = db.get(LatentImage, initialization.selected_image_id)
+            if selected is None:
+                raise FileNotFoundError("Persona W artifact is unavailable")
+            baseline = np.asarray(load_latent(selected), dtype=np.float32)
     else:
         initial_theta = conditional_prior.theta_mean.astype(np.float32)
         baseline = np.asarray(
@@ -217,6 +245,7 @@ def get_or_create_block(
     block = ExperimentBlock(
         block_id=block_id,
         participant_id=participant.participant_id,
+        session_id=(experiment_session.session_id if experiment_session else None),
         sequence_index=sequence_index,
         m_value=m_value,
         strategy_mode=selected_mode,
@@ -229,6 +258,20 @@ def get_or_create_block(
         strategy_parameters_json=json_dumps(strategy_parameters),
     )
     db.add(block)
+    db.flush()
+    if experiment_session is not None:
+        mark_session_started(db, experiment_session, block)
+        add_event(
+            db,
+            experiment_session.session_id,
+            "block_started",
+            block_id=block.block_id,
+            payload={
+                "block_index": sequence_index,
+                "algorithm": selected_mode,
+                "m_value": m_value,
+            },
+        )
     if initialization is not None:
         participant.baseline_latent_path = initialization.w_path
     db.commit()
@@ -270,14 +313,28 @@ def generate_experiment_round(
     )
     if existing:
         return existing
-
-    return _generate_query_round(
-        db=db,
-        runtime=runtime,
-        participant=participant,
-        block=block,
-        round_id=round_id,
-    )
+    with runtime.generation_lock:
+        existing = list(
+            db.scalars(
+                select(LatentImage)
+                .where(
+                    LatentImage.participant_id == participant.participant_id,
+                    LatentImage.block_id == block.block_id,
+                    LatentImage.round_id == round_id,
+                    LatentImage.stage_type == "experiment1",
+                )
+                .order_by(LatentImage.created_at)
+            )
+        )
+        if existing:
+            return existing
+        return _generate_query_round(
+            db=db,
+            runtime=runtime,
+            participant=participant,
+            block=block,
+            round_id=round_id,
+        )
 
 
 def _generate_query_round(
@@ -288,6 +345,7 @@ def _generate_query_round(
     round_id: int,
 ) -> list[LatentImage]:
     """Optimize, decode, persist, and return one direct synthetic query set."""
+    total_started = time.perf_counter()
     ensure_block_files(block)
     strategy_parameters = json_loads(block.strategy_parameters_json or "{}")
     strategy = runtime.strategy_for(block.strategy_mode, strategy_parameters)
@@ -299,6 +357,7 @@ def _generate_query_round(
             f"{block.block_id}:round:{round_id}", participant.base_seed
         )
     )
+    algorithm_started = time.perf_counter()
     proposal = strategy.propose(
         center=center,
         sigma=1.0,
@@ -312,11 +371,40 @@ def _generate_query_round(
         raise RuntimeError(
             f"{block.strategy_mode} returned an unexpected number of synthetic queries"
         )
-    sync_block_files(block)
-    evaluated = evaluate_candidates(runtime, proposal.latents)
     round_directory = (
         Path(block.strategy_state_path).parent / f"round_{round_id:02d}"
     )
+    covariance_path = round_directory / "posterior_covariance.npy"
+    if not covariance_path.exists():
+        raise RuntimeError("Query strategy did not persist posterior covariance")
+    conditional_prior = runtime.conditional_prior(strategy_parameters)
+    with Path(block.strategy_state_path).open("rb") as state_handle:
+        posterior_state = pickle.load(state_handle)
+    final_theta, diversity_metrics = ensure_query_diversity(
+        theta=np.asarray(proposal.features, dtype=np.float32),
+        posterior_covariance=np.load(covariance_path),
+        prior=conditional_prior,
+        generator=runtime.generator,
+        image_embedder=runtime.clip_ranker,
+        config=QueryDiversityConfig(
+            **runtime.config.query_diversity.as_dict()
+        ),
+        posterior_particles=np.asarray(posterior_state["particles"]),
+        posterior_weights=np.asarray(posterior_state["weights"]),
+        beta=float(posterior_state.get("beta", 1.0)),
+        algorithm=block.strategy_mode,
+    )
+    proposal.features = final_theta
+    proposal.latents = np.asarray(
+        conditional_prior.theta_to_w(final_theta), dtype=np.float32
+    )
+    proposal.metadata = {**(proposal.metadata or {}), **diversity_metrics}
+    algorithm_latency_ms = (time.perf_counter() - algorithm_started) * 1000.0
+    sync_block_files(block)
+    generation_started = time.perf_counter()
+    evaluated = evaluate_candidates(runtime, proposal.latents)
+    generation_latency_ms = (time.perf_counter() - generation_started) * 1000.0
+    np.save(round_directory / "final_query_points.npy", final_theta)
     image_directory = round_directory / "decoded_images"
     image_directory.mkdir(parents=True, exist_ok=True)
     artifacts: list[LatentImage] = []
@@ -352,7 +440,33 @@ def _generate_query_round(
                 metadata=metadata,
             )
         )
+    experiment_session = session_for_participant(db, participant.participant_id)
+    if experiment_session is not None:
+        add_event(
+            db,
+            experiment_session.session_id,
+            "query_generated",
+            block_id=block.block_id,
+            payload={
+                "round_index": round_id,
+                "algorithm": block.strategy_mode,
+                "m_value": block.m_value,
+                "image_ids": [artifact.image_id for artifact in artifacts],
+            },
+        )
     db.commit()
+    total_request_latency_ms = (time.perf_counter() - total_started) * 1000.0
+    logger.info(
+        "query_latency algorithm=%s m_value=%s round=%s "
+        "algorithm_latency_ms=%.1f generation_latency_ms=%.1f "
+        "total_request_latency_ms=%.1f",
+        block.strategy_mode,
+        block.m_value,
+        round_id,
+        algorithm_latency_ms,
+        generation_latency_ms,
+        total_request_latency_ms,
+    )
     return artifacts
 
 

@@ -12,6 +12,20 @@ outputs
 references
 tests
 
+# The Vercel function imports only index.py -> app.entrypoint -> app.gateway.
+# Exclude the complete model/DB/research application tree from its bundle.
+core
+experiments
+app/db
+app/models
+app/routes
+app/services
+app/templates
+app/main.py
+app/settings.py
+requirements.txt
+requirements-gpu.txt
+
 *.pkl
 *.pth
 *.pt

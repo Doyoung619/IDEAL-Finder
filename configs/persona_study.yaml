@@ -11,11 +11,11 @@ generator:
   output_resolution: 256
   batch_size: 8
   noise_mode: "const"
-  stylegan_repo: "/data1/doyoung/Ideal/third_party/stylegan3"
-  network_path: "/data1/doyoung/Ideal/checkpoints/stylegan3-r-ffhqu-256x256.pkl"
+  stylegan_repo: "models/stylegan3"
+  network_path: "models/stylegan3-r-ffhqu-256x256.pkl"
 
 conditional_prior:
-  artifact_path: "artifacts/priors/{gender}_20_29_d12.npz"
+  artifact_path: "artifacts/priors/{gender}_20_29_{race}_d12.npz"
   latent_space: "w"
   dimension: 12
 
@@ -29,20 +29,23 @@ clip:
 
 demographic:
   classifier: "fairface_vit_triplet"
-  race_weights: "/data1/doyoung/Ideal/checkpoints/fairface_race"
-  gender_weights: "/data1/doyoung/Ideal/checkpoints/fairface_gender"
-  age_weights: "/data1/doyoung/Ideal/checkpoints/fairface_age"
+  race_weights: "models/fairface_race"
+  gender_weights: "models/fairface_gender"
+  age_weights: "models/fairface_age"
   devices: ["cuda:1", "cuda:2", "cuda:3"]
   batch_size: 64
-  race_targets: []
+  race_targets: ["east_asian"]
+  race_threshold: 0.80
 
 persona:
   enabled: true
   required: true
-  fixed_race: "unrestricted"
+  # Initial slate plus one deterministic, non-repeating reroll.
+  max_candidate_pages: 2
+  fixed_race: "east_asian"
   fixed_age_range: "20_29"
-  female_pool: "artifacts/persona_pools/female_20_29_d12"
-  male_pool: "artifacts/persona_pools/male_20_29_d12"
+  female_pool: "artifacts/persona_pools/female_20_29_east_asian_d12"
+  male_pool: "artifacts/persona_pools/male_20_29_east_asian_d12"
   prior_covariance_scale: 0.35
   global_mixture_weight: 0.45
   global_covariance_scale: 1.0
@@ -53,16 +56,18 @@ persona_pool:
   minimum_usable_size: 1000
   max_generated: 2000
   batch_size: 64
-  face_detector_path: "/data1/doyoung/Ideal/checkpoints/face_detection_yunet_2023mar.onnx"
+  face_detector_path: "models/face_detection_yunet_2023mar.onnx"
   face_confidence_threshold: 0.65
 
 search:
-  version: "rc_mlq_v4_randomized_entropy_spread14"
+  version: "rc_mlq_v4_randomized_entropy_spread14_fixed_beta_audit20260821"
 
 query:
   entropy_output_spread_scale: 1.4
   beta: 1.0
-  adaptive_beta_enabled: true
+  # Audit result: fixed beta reduced paired error and catastrophic failures,
+  # especially for RC-MLQ. Keep the generic default unchanged for compatibility.
+  adaptive_beta_enabled: false
   beta_min: 0.35
   beta_max: 2.5
   beta_smoothing: 0.30
@@ -70,6 +75,18 @@ query:
   rc_resolution_max: 6.0
   rc_resolution_steps: 120
   rc_posterior_samples: 4096
+
+query_diversity:
+  enabled: true
+  latent_min_distance: 0.15
+  # Set after inspecting the real OpenCLIP histogram/contact sheets.
+  image_similarity_threshold: null
+  max_retries: 3
+  perturbation_initial: 0.10
+  perturbation_max: 0.40
+  max_relative_ig_loss: 0.05
+  radius_expansion_factors: [1.1, 1.2, 1.35]
+  orthogonal_fallback: true
 
 evaluation:
   answer_key_enabled: false
