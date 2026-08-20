@@ -53,6 +53,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.querySelectorAll("[data-single-submit]").forEach((form) => {
     form.addEventListener("submit", () => {
+      const overlay = document.querySelector("[data-loading-overlay]");
+      const message = overlay?.querySelector("[data-loading-message]");
+      if (message) {
+        message.textContent = form.dataset.loadingMessage || "처리 중입니다…";
+      }
+      if (overlay) overlay.hidden = false;
       const buttons = form.querySelectorAll('button[type="submit"]');
       buttons.forEach((button) => {
         button.disabled = true;

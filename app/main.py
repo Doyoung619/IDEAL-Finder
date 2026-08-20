@@ -104,7 +104,11 @@ def create_app(
         return response
 
     @application.exception_handler(SQLAlchemyError)
-    async def database_unavailable(_request, _error):
+    async def database_unavailable(_request, error):
+        logger.error(
+            "database_request_failed",
+            exc_info=(type(error), error, error.__traceback__),
+        )
         return HTMLResponse(
             "<h1>임시로 저장 서버에 연결할 수 없습니다.</h1>"
             "<p>이 화면에서 다음 단계로 넘어가지 않았습니다. "

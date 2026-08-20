@@ -1,7 +1,7 @@
 experiment:
   m_list: [8, 4, 2]
   algorithm_order: ["entropy", "rc_mlq"]
-  rounds_per_m: 12
+  rounds_per_m: 8
   answer_key_faces: 0
   recommendation_conditions: []
 
@@ -60,10 +60,16 @@ persona_pool:
   face_confidence_threshold: 0.65
 
 search:
-  version: "rc_mlq_v4_randomized_entropy_spread14_fixed_beta_audit20260821"
+  version: "rc_mlq_v5_rho15_novelty50_fast_round8_20260821"
 
 query:
+  posterior_mc_samples: 256
+  num_restarts: 3
+  optimization_steps: 60
   entropy_output_spread_scale: 1.4
+  exploration_rho: 0.15
+  novelty_candidate_fraction: 0.50
+  novelty_candidate_pool_size: 64
   beta: 1.0
   # Audit result: fixed beta reduced paired error and catastrophic failures,
   # especially for RC-MLQ. Keep the generic default unchanged for compatibility.
@@ -73,12 +79,12 @@ query:
   beta_smoothing: 0.30
   rc_resolution_min: 0.2
   rc_resolution_max: 6.0
-  rc_resolution_steps: 120
-  rc_posterior_samples: 4096
+  rc_resolution_steps: 80
+  rc_posterior_samples: 2048
 
 query_diversity:
   enabled: true
-  latent_min_distance: 0.15
+  latent_min_distance: 0.75
   # Set after inspecting the real OpenCLIP histogram/contact sheets.
   image_similarity_threshold: null
   max_retries: 3

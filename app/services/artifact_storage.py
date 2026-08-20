@@ -24,9 +24,17 @@ def array_from_npy_bytes(payload: bytes) -> np.ndarray:
     return np.load(io.BytesIO(payload), allow_pickle=False)
 
 
-def image_to_png_bytes(image: Image.Image) -> bytes:
+def image_to_png_bytes(
+    image: Image.Image,
+    *,
+    optimize: bool = True,
+    compress_level: int | None = None,
+) -> bytes:
     buffer = io.BytesIO()
-    image.save(buffer, format="PNG", optimize=True)
+    options = {"optimize": optimize}
+    if compress_level is not None:
+        options["compress_level"] = int(compress_level)
+    image.save(buffer, format="PNG", **options)
     return buffer.getvalue()
 
 

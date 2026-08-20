@@ -1,5 +1,13 @@
 # IDEAL-Finder Algorithm Audit
 
+> Post-audit production override (2026-08-21): following real-user inspection
+> of late-round StyleGAN outputs, the live study now uses 8 rounds per M,
+> acquisition-only global exploration with `rho=0.15`, a latent-distance floor,
+> 50% cross-round novelty slots, and a reduced query-optimization budget. These
+> UX/runtime changes intentionally
+> differ from the frozen baseline evaluated below; the original manifest remains
+> the historical audit reference.
+
 Audit date: 2026-08-21 (Asia/Seoul)
 
 ## Current implementation

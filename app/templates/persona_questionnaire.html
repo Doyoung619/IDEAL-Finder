@@ -3,10 +3,11 @@
 {% block content %}
 <section class="content-card persona-sheet">
   <div class="step-label">STEP 2 · PERSONA</div>
+  <span class="condition-badge">선호 대상 · {{ target_gender_label }}</span>
   <h1>어떤 인상의 얼굴을 찾고 있나요?</h1>
   <p class="muted">각 항목에서 떠오르는 특징만 골라주세요. 기술적인 점수나 모델 용어는 이후 화면에도 표시되지 않습니다.</p>
-  <div class="notice subtle">생성 범위는 인종 제한 없이 한 명의 20–29세 성인, 정면에 가까운 실사형 얼굴 초상으로 고정됩니다.</div>
-  <form method="post" action="/persona" class="stack-form" data-persona-form data-single-submit>
+  <div class="notice subtle">생성 범위는 {{ population_label }} 20–29세 성인 {{ target_gender_label }} 한 명, 정면에 가까운 실사형 얼굴 초상으로 고정됩니다.</div>
+  <form method="post" action="/persona" class="stack-form" data-persona-form data-single-submit data-loading-message="선택 조건에 맞는 초기 얼굴을 찾고 있습니다…">
     <div class="profile-categories">
       {% for category in categories %}
       <fieldset class="chip-category" data-persona-category data-max="{{ category.maximum }}">

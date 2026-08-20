@@ -12,7 +12,7 @@
   </div>
   <div class="notice subtle">이 블록은 총 {{ rounds }}라운드입니다. 라운드 시간은 화면에 표시되지 않습니다.</div>
   {% if error %}<div class="alert">{{ error }}</div>{% endif %}
-  <form method="post" action="/experiment1/start" data-single-submit>
+  <form method="post" action="/experiment1/start" data-single-submit data-loading-message="첫 번째 얼굴 묶음을 생성하고 있습니다…">
     <input type="hidden" name="block_index" value="{{ block.sequence_index if block else block_number - 1 }}">
     <div class="locked-algorithm">
       <strong>{{ algorithm.label }}</strong>

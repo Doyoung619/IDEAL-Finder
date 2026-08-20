@@ -40,6 +40,7 @@ from app.services.profile_service import build_profile_prompt
 from core.latent_sampler import farthest_point_sampling
 from core.preference_model import PairwisePreferenceModel
 from core.query_diversity import QueryDiversityConfig, ensure_query_diversity
+from core.query_novelty import inject_novel_global_candidates
 from core.utils import latent_fingerprint
 from experiments.design import stable_seed
 from experiments.logging_utils import json_dumps, json_loads
@@ -378,10 +379,43 @@ def _generate_query_round(
     if not covariance_path.exists():
         raise RuntimeError("Query strategy did not persist posterior covariance")
     conditional_prior = runtime.conditional_prior(strategy_parameters)
+    history_points = []
+    for previous_round in range(1, round_id):
+        previous_path = (
+            Path(block.strategy_state_path).parent
+            / f"round_{previous_round:02d}"
+            / "final_query_points.npy"
+        )
+        if previous_path.exists():
+            history_points.append(np.load(previous_path, allow_pickle=False))
+    history = (
+        np.vstack(history_points)
+        if history_points
+        else np.empty((0, conditional_prior.dimension), dtype=np.float32)
+    )
+    novelty_fraction = float(
+        getattr(runtime.config.query, "novelty_candidate_fraction", 0.0)
+    )
+    novelty_theta, novelty_metrics = inject_novel_global_candidates(
+        np.asarray(proposal.features, dtype=np.float32),
+        history,
+        conditional_prior.theta_mean,
+        conditional_prior.theta_covariance
+        * float(runtime.config.persona.global_covariance_scale),
+        fraction=novelty_fraction,
+        pool_size=int(
+            getattr(runtime.config.query, "novelty_candidate_pool_size", 64)
+        ),
+        seed=seed,
+        coordinate_clip=conditional_prior.coordinate_clip,
+    )
+    if proposal.roles:
+        for index in novelty_metrics["novelty_replaced_indices"]:
+            proposal.roles[index] = "global_novelty_exploration"
     with Path(block.strategy_state_path).open("rb") as state_handle:
         posterior_state = pickle.load(state_handle)
     final_theta, diversity_metrics = ensure_query_diversity(
-        theta=np.asarray(proposal.features, dtype=np.float32),
+        theta=novelty_theta,
         posterior_covariance=np.load(covariance_path),
         prior=conditional_prior,
         generator=runtime.generator,
@@ -398,7 +432,11 @@ def _generate_query_round(
     proposal.latents = np.asarray(
         conditional_prior.theta_to_w(final_theta), dtype=np.float32
     )
-    proposal.metadata = {**(proposal.metadata or {}), **diversity_metrics}
+    proposal.metadata = {
+        **(proposal.metadata or {}),
+        **novelty_metrics,
+        **diversity_metrics,
+    }
     algorithm_latency_ms = (time.perf_counter() - algorithm_started) * 1000.0
     sync_block_files(block)
     generation_started = time.perf_counter()
@@ -409,10 +447,13 @@ def _generate_query_round(
     image_directory.mkdir(parents=True, exist_ok=True)
     artifacts: list[LatentImage] = []
     for display_index, candidate in enumerate(evaluated):
-        candidate.image.save(
-            image_directory / f"query_{display_index + 1:02d}.png",
-            format="PNG",
-            optimize=True,
+        image_payload = image_to_png_bytes(
+            candidate.image,
+            optimize=False,
+            compress_level=3,
+        )
+        (image_directory / f"query_{display_index + 1:02d}.png").write_bytes(
+            image_payload
         )
         metadata = {
             "search_version": runtime.config.search.version,
@@ -438,6 +479,7 @@ def _generate_query_round(
                 round_id=round_id,
                 batch_id=None,
                 metadata=metadata,
+                image_payload=image_payload,
             )
         )
     experiment_session = session_for_participant(db, participant.participant_id)
@@ -1147,6 +1189,7 @@ def persist_candidate(
     round_id: int | None,
     batch_id: str | None,
     metadata: dict,
+    image_payload: bytes | None = None,
 ) -> LatentImage:
     image_id = str(uuid.uuid4())
     condition_segment = condition_type.replace("=", "_").replace(" ", "_")
@@ -1163,7 +1206,7 @@ def persist_candidate(
     latent_path = artifact_dir / f"{fingerprint}.npy"
     image_path = artifact_dir / f"{fingerprint}.png"
     latent_payload = array_to_npy_bytes(candidate.latent)
-    image_payload = image_to_png_bytes(candidate.image)
+    image_payload = image_payload or image_to_png_bytes(candidate.image)
     if not latent_path.exists():
         latent_path.write_bytes(latent_payload)
     if not image_path.exists():

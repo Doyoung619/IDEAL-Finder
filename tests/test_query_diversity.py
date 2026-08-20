@@ -40,7 +40,40 @@ def test_disabled_guard_is_diagnostic_only():
     assert np.array_equal(final, theta)
     assert not metadata["diversity_guard_triggered"]
     assert metadata["num_corrected_queries"] == 0
-    assert metadata["max_pairwise_image_similarity"] == pytest.approx(1.0)
+    assert metadata["max_pairwise_image_similarity"] is None
+
+
+class FailingGenerator:
+    def decode(self, latents):
+        raise AssertionError("latent-only diversity must not render images")
+
+
+class FailingEmbedder:
+    def encode_images(self, images):
+        raise AssertionError("latent-only diversity must not encode images")
+
+
+def test_latent_guard_expands_queries_without_rendering_images():
+    theta = np.array(
+        [[-0.1, 0.0, 0.0, 0.0], [0.1, 0.0, 0.0, 0.0]],
+        dtype=np.float32,
+    )
+    final, metadata = ensure_query_diversity(
+        theta,
+        np.diag([1.0, 0.8, 0.4, 0.2]),
+        prior(),
+        FailingGenerator(),
+        FailingEmbedder(),
+        QueryDiversityConfig(
+            enabled=True,
+            latent_min_distance=0.75,
+            image_similarity_threshold=None,
+        ),
+    )
+    assert metadata["diversity_guard_triggered"]
+    assert metadata["pre_guard_min_pairwise_theta_distance"] == pytest.approx(0.2)
+    assert metadata["min_pairwise_theta_distance"] == pytest.approx(0.75)
+    assert np.linalg.norm(final[0] - final[1]) == pytest.approx(0.75)
 
 
 def test_guard_moves_only_duplicates_along_bounded_secondary_directions():

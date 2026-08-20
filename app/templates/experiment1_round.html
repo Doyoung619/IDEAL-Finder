@@ -11,7 +11,7 @@
       <strong>Round {{ round_id }} / {{ total_rounds }}</strong>
     </div>
   </div>
-  <form method="post" action="/experiment1/round" data-selection-form data-single-submit>
+  <form method="post" action="/experiment1/round" data-selection-form data-single-submit data-loading-message="선택을 반영하고 다음 얼굴을 생성하고 있습니다…">
     <input type="hidden" name="block_index" value="{{ block_index }}">
     <input type="hidden" name="round_id" value="{{ round_id }}">
     <input type="hidden" name="selected_image_id" data-selected-input>

@@ -26,6 +26,13 @@
   <footer class="site-footer">
     연구용 프로토타입 · 모든 자극 이미지는 저장된 잠재벡터에서 생성됩니다.
   </footer>
+  <div class="loading-overlay" data-loading-overlay hidden aria-live="polite" aria-busy="true">
+    <div class="loading-card">
+      <span class="loading-spinner" aria-hidden="true"></span>
+      <strong data-loading-message>처리 중입니다…</strong>
+      <small>얼굴 생성에는 몇 초가 걸릴 수 있습니다. 이 창을 닫지 마세요.</small>
+    </div>
+  </div>
   {% block scripts %}{% endblock %}
 </body>
 </html>

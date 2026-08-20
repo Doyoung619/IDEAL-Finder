@@ -5,7 +5,7 @@ import logging
 import shutil
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -205,14 +205,36 @@ PERSONA_CATEGORIES: tuple[PersonaCategory, ...] = (
     ),
 )
 
-CATEGORY_BY_KEY = {category.key: category for category in PERSONA_CATEGORIES}
-OPTION_BY_KEY = {
-    option.key: option
-    for category in PERSONA_CATEGORIES
-    for option in category.options
-    if option.key != "no_preference"
-}
 
+MALE_HAIR_LENGTH_OPTIONS = (
+    _option("short_hair", "짧은 머리", "short haircut"),
+    _option("medium_hair", "보통 길이", "medium-length hair"),
+    _option("long_hair", "장발", "long hair"),
+    NO_PREFERENCE,
+)
+
+MALE_HAIR_STYLE_OPTIONS = (
+    _option("straight_hair", "직모 / 생머리", "straight hair"),
+    _option("wavy_hair", "자연스러운 웨이브", "naturally wavy hair"),
+    _option("bangs", "앞머리 있음", "with bangs"),
+    _option("no_bangs", "앞머리 없음", "without bangs"),
+    _option("neat_hair", "단정한 스타일", "neatly styled hair"),
+    NO_PREFERENCE,
+)
+
+
+def persona_categories_for_gender(target_gender: str) -> tuple[PersonaCategory, ...]:
+    """Return the questionnaire options appropriate for the requested face."""
+    if target_gender != "male":
+        return PERSONA_CATEGORIES
+    categories: list[PersonaCategory] = []
+    for category in PERSONA_CATEGORIES:
+        if category.key == "hair_length":
+            category = replace(category, options=MALE_HAIR_LENGTH_OPTIONS)
+        elif category.key == "hair_style":
+            category = replace(category, options=MALE_HAIR_STYLE_OPTIONS)
+        categories.append(category)
+    return tuple(categories)
 
 class PersonaValidationError(ValueError):
     pass
@@ -225,13 +247,15 @@ def validate_persona_profile(
 ) -> dict[str, list[str]]:
     if target_gender not in {"female", "male"}:
         raise PersonaValidationError("선호 대상 성별은 여성 또는 남성이어야 합니다.")
-    unknown_categories = set(answers) - set(CATEGORY_BY_KEY)
+    categories = persona_categories_for_gender(target_gender)
+    category_by_key = {category.key: category for category in categories}
+    unknown_categories = set(answers) - set(category_by_key)
     if unknown_categories:
         raise PersonaValidationError("알 수 없는 persona 문항이 포함되어 있습니다.")
 
     normalized: dict[str, list[str]] = {}
     selected: set[str] = set()
-    for category in PERSONA_CATEGORIES:
+    for category in categories:
         values = list(dict.fromkeys(str(value) for value in answers.get(category.key, ())))
         allowed = {option.key for option in category.options}
         if not values:
@@ -270,6 +294,13 @@ def build_persona_prompt_bundle(
     fixed_race: str = FIXED_RACE,
 ) -> PersonaPromptBundle:
     validated = validate_persona_profile(target_gender, answers, priorities)
+    categories = persona_categories_for_gender(target_gender)
+    option_by_key = {
+        option.key: option
+        for category in categories
+        for option in category.options
+        if option.key != "no_preference"
+    }
     noun = "woman" if target_gender == "female" else "man"
     base_prompt = (
         "a high-quality realistic studio head-and-shoulders portrait photograph "
@@ -283,13 +314,13 @@ def build_persona_prompt_bundle(
     raw_weights: list[float] = []
     priority_set = set(validated["priorities"])
 
-    for category in PERSONA_CATEGORIES:
+    for category in categories:
         keys = validated[category.key]
         concrete = [key for key in keys if key != "no_preference"]
         if not concrete:
             korean_parts.append(f"{category.label_ko}: 상관없음")
             continue
-        options = [OPTION_BY_KEY[key] for key in concrete]
+        options = [option_by_key[key] for key in concrete]
         phrases = [option.prompt_en for option in options if option.prompt_en]
         labels = [option.label_ko for option in options]
         phrase = ", ".join(phrases)
@@ -320,7 +351,7 @@ def build_persona_prompt_bundle(
         "fixed_age": FIXED_AGE,
         "answers": {
             category.key: validated[category.key]
-            for category in PERSONA_CATEGORIES
+            for category in categories
         },
         "priorities": validated["priorities"],
     }
@@ -337,8 +368,13 @@ def build_persona_prompt_bundle(
     )
 
 
-def answers_from_form(form) -> tuple[dict[str, list[str]], list[str]]:
-    answers = {category.key: [] for category in PERSONA_CATEGORIES}
+def answers_from_form(
+    form, target_gender: str
+) -> tuple[dict[str, list[str]], list[str]]:
+    answers = {
+        category.key: []
+        for category in persona_categories_for_gender(target_gender)
+    }
     priorities: list[str] = []
     for key, value in form.multi_items():
         if key.startswith("persona::"):

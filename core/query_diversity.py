@@ -45,6 +45,27 @@ def pairwise_diagnostics(
     }
 
 
+def _latent_diagnostics(theta: np.ndarray) -> dict[str, object]:
+    values = np.asarray(theta, dtype=np.float64)
+    if len(values) < 2:
+        minimum = 0.0
+    else:
+        pairs = np.triu_indices(len(values), k=1)
+        minimum = float(
+            np.min(
+                np.linalg.norm(
+                    values[:, None, :] - values[None, :, :], axis=-1
+                )[pairs]
+            )
+        )
+    return {
+        "min_pairwise_theta_distance": minimum,
+        "max_pairwise_image_similarity": None,
+        "mean_pairwise_image_similarity": None,
+        "pairwise_image_similarities": [],
+    }
+
+
 def ensure_query_diversity(
     theta: np.ndarray,
     posterior_covariance: np.ndarray,
@@ -72,13 +93,38 @@ def ensure_query_diversity(
         embeddings = image_embedder.encode_images(images)
         return embeddings, pairwise_diagnostics(values, embeddings)
 
-    embeddings, before = measure(final)
     corrected: set[int] = set()
     maximum_applied = 0.0
     retries = 0
     radius_expansion_factor = 1.0
     radius_candidates: list[dict] = []
     threshold = config.image_similarity_threshold
+    embeddings = None
+    if threshold is not None:
+        embeddings, before = measure(final)
+    else:
+        before = _latent_diagnostics(final)
+    initial_theta_distance = float(before["min_pairwise_theta_distance"])
+    if (
+        config.enabled
+        and len(final) > 1
+        and initial_theta_distance > 1e-12
+        and initial_theta_distance < config.latent_min_distance
+    ):
+        center = np.mean(final, axis=0)
+        expanded = center[None, :] + (
+            config.latent_min_distance / initial_theta_distance
+        ) * (final - center[None, :])
+        if prior.coordinate_clip is not None:
+            expanded = np.clip(
+                expanded, -prior.coordinate_clip, prior.coordinate_clip
+            )
+        movement = np.linalg.norm(expanded - original, axis=1)
+        corrected.update(np.flatnonzero(movement > 1e-9).tolist())
+        maximum_applied = float(np.max(movement))
+        final = expanded
+        if threshold is not None:
+            embeddings, _ = measure(final)
     initial_information = (
         expected_information_gain(
             posterior_particles, posterior_weights, final, beta
@@ -191,7 +237,12 @@ def ensure_query_diversity(
                 maximum_applied = max(maximum_applied, norm)
             retries = retry + 1
             embeddings, _ = measure(final)
-    _, after = measure(final) if corrected else (embeddings, before)
+    if threshold is None:
+        after = _latent_diagnostics(final)
+    elif corrected:
+        _, after = measure(final)
+    else:
+        after = before
     metadata = {
         **after,
         "pre_guard_min_pairwise_theta_distance": before[

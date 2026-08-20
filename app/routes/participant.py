@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 import pickle
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import delete, func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -61,7 +62,6 @@ from app.services.participant_service import (
 )
 from app.services.profile_service import PROFILE_CATEGORIES
 from app.services.persona_service import (
-    PERSONA_CATEGORIES,
     PersonaValidationError,
     answers_from_form,
     build_persona_prompt_bundle,
@@ -70,12 +70,14 @@ from app.services.persona_service import (
     get_or_create_candidate_batch,
     get_persona_profile,
     latest_selected_batch,
+    persona_categories_for_gender,
     save_persona_profile,
 )
 from experiments.logging_utils import exit_screen, json_dumps, json_loads
 
 
 router = APIRouter()
+logger = logging.getLogger("ideal_finder.participant")
 
 CONDITION_LABELS = {
     "none": "조건 A · 추가 정보 없음",
@@ -87,6 +89,18 @@ CONDITION_LABELS = {
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def persona_display_context(target_gender: str, fixed_race: str) -> dict[str, object]:
+    return {
+        "categories": persona_categories_for_gender(target_gender),
+        "target_gender_label": "남성" if target_gender == "male" else "여성",
+        "population_label": (
+            "동아시아인"
+            if fixed_race == "east_asian"
+            else "전체 인종"
+        ),
+    }
 
 
 def _finalize_submitted_round(
@@ -279,6 +293,10 @@ def persona_page(request: Request, db: Session = Depends(get_db)):
         responses = json_loads(profile.responses_json, {})
         selected_values = {value for values in responses.values() for value in values}
         priorities = set(json_loads(profile.priorities_json, []))
+    display = persona_display_context(
+        str(participant.preferred_target_gender),
+        str(request.app.state.config.persona.fixed_race),
+    )
     return request.app.state.templates.TemplateResponse(
         request,
         "persona_questionnaire.html",
@@ -287,7 +305,7 @@ def persona_page(request: Request, db: Session = Depends(get_db)):
             participant,
             "persona_questionnaire",
             db,
-            categories=PERSONA_CATEGORIES,
+            **display,
             selected_values=selected_values,
             priorities=priorities,
         ),
@@ -302,10 +320,11 @@ async def submit_persona(request: Request, db: Session = Depends(get_db)):
     if db.get(PersonaInitialization, participant.participant_id) is not None:
         return redirect(initialized_destination(db, participant))
     form = await request.form()
-    answers, priorities = answers_from_form(form)
+    target_gender = str(participant.preferred_target_gender)
+    answers, priorities = answers_from_form(form, target_gender)
     try:
         bundle = build_persona_prompt_bundle(
-            str(participant.preferred_target_gender),
+            target_gender,
             answers,
             priorities,
             priority_multiplier=float(request.app.state.config.persona.priority_multiplier),
@@ -318,7 +337,10 @@ async def submit_persona(request: Request, db: Session = Depends(get_db)):
             template_context(
                 request,
                 participant,
-                categories=PERSONA_CATEGORIES,
+                **persona_display_context(
+                    target_gender,
+                    str(request.app.state.config.persona.fixed_race),
+                ),
                 selected_values={value for values in answers.values() for value in values},
                 priorities=set(priorities),
                 error=str(exc),
@@ -359,6 +381,9 @@ def persona_candidates_page(request: Request, db: Session = Depends(get_db)):
                 batch=None,
                 cards=[],
                 can_show_more=False,
+                population_label=persona_display_context(
+                    profile.target_gender, profile.fixed_race
+                )["population_label"],
                 error=str(exc),
             ),
             status_code=503,
@@ -381,6 +406,9 @@ def persona_candidates_page(request: Request, db: Session = Depends(get_db)):
             profile=profile,
             batch=batch,
             cards=cards,
+            population_label=persona_display_context(
+                profile.target_gender, profile.fixed_race
+            )["population_label"],
             can_show_more=(
                 batch.page_index < int(request.app.state.config.persona.max_candidate_pages)
             ),
@@ -632,7 +660,14 @@ def experiment1_round_page(
             experiment_block,
             round_id,
         )
-    except RuntimeError:
+    except (RuntimeError, SQLAlchemyError) as exc:
+        db.rollback()
+        logger.exception(
+            "experiment_round_generation_failed participant_id=%s block_id=%s round=%s",
+            participant.participant_id,
+            experiment_block.block_id,
+            round_id,
+        )
         algorithm = catalog_by_key(request.app.state.config).get(
             experiment_block.strategy_mode
         )

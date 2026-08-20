@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from core.conditional_prior import ConditionalPCAPrior
+from core.exploration import acquisition_posterior
 from core.preference_posterior import ParticleMixturePreferencePosterior
 from core.rc_mlq import RCMLQConfig, RCMLQSelector
 from core.utils import resolve_device, save_json
@@ -206,6 +207,9 @@ class EntropyQueryStrategy:
         self.beta_max = float(parameters.get("beta_max", 2.5))
         self.beta_smoothing = float(parameters.get("beta_smoothing", 0.30))
         self.posterior_seed = int(parameters.get("posterior_seed", parameters["seed"]))
+        self.exploration_rho = float(parameters.get("exploration_rho", 0.0))
+        if not 0.0 <= self.exploration_rho < 1.0:
+            raise ValueError("exploration_rho must be in [0, 1)")
         self.selector = selector_class(
             config_class(
                 posterior_mc_samples=int(parameters["posterior_mc_samples"]),
@@ -306,8 +310,14 @@ class EntropyQueryStrategy:
             raise ValueError("Entropy Query requires a persistent state path")
         state = self._load_or_initialize_state(state_path)
         posterior = self._posterior_from_state(state)
+        acquisition = acquisition_posterior(
+            posterior,
+            self.prior.theta_mean,
+            self.prior.theta_covariance * self.global_covariance_scale,
+            self.exploration_rho,
+        )
         result = self.selector.select(
-            posterior=posterior,
+            posterior=acquisition,
             prior_covariance=posterior.prior_covariance,
             num_options=int(display_count),
             seed=int(seed),
@@ -323,6 +333,7 @@ class EntropyQueryStrategy:
             "global_component_mass": posterior.global_mass,
             "effective_sample_size": posterior.effective_sample_size,
             "beta": posterior.beta,
+            "exploration_rho": self.exploration_rho,
             **result.metadata(),
         }
         round_directory = self._round_directory(state_path, round_id)
@@ -522,7 +533,13 @@ class RCMLQStrategy(EntropyQueryStrategy):
             raise ValueError("RC-MLQ requires a persistent state path")
         state = self._load_or_initialize_state(state_path)
         posterior = self._posterior_from_state(state)
-        result = self.rc_selector.select(posterior, int(display_count), int(seed))
+        acquisition = acquisition_posterior(
+            posterior,
+            self.prior.theta_mean,
+            self.prior.theta_covariance * self.global_covariance_scale,
+            self.exploration_rho,
+        )
+        result = self.rc_selector.select(acquisition, int(display_count), int(seed))
         theta_queries = result.query_points.astype(np.float32)
         w_queries = np.asarray(self.prior.theta_to_w(theta_queries), dtype=np.float32)
         metrics = {
@@ -532,6 +549,7 @@ class RCMLQStrategy(EntropyQueryStrategy):
             "global_component_mass": posterior.global_mass,
             "effective_sample_size": posterior.effective_sample_size,
             "beta": posterior.beta,
+            "exploration_rho": self.exploration_rho,
             **result.metadata(),
         }
         round_directory = self._round_directory(state_path, round_id)
@@ -589,6 +607,7 @@ def create_query_strategy(
         "resolution_max": float(config.query.rc_resolution_max),
         "resolution_steps": int(config.query.rc_resolution_steps),
         "rc_posterior_samples": int(config.query.rc_posterior_samples),
+        "exploration_rho": float(getattr(config.query, "exploration_rho", 0.0)),
     }
     values.update(parameters or {})
     strategy_class = EntropyQueryStrategy if selected == "entropy" else RCMLQStrategy

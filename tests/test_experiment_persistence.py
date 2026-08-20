@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import BigInteger, func, select
 
 from app.db.base import get_session, reset_database_for_tests
 from app.main import create_app
@@ -16,10 +16,25 @@ from app.models import (
     ExperimentRound,
     ExperimentSession,
     LatentImage,
+    Participant,
     Selection,
 )
 from app.services.persona_service import PERSONA_CATEGORIES
 from app.settings import load_config
+
+
+def test_unsigned_32_bit_seeds_use_bigint_columns():
+    seed_columns = (
+        Participant.base_seed,
+        ExperimentSession.experiment_seed,
+        ExperimentBlock.initial_seed,
+        LatentImage.generator_seed,
+        ExperimentRound.random_seed,
+    )
+    assert all(
+        isinstance(column.property.columns[0].type, BigInteger)
+        for column in seed_columns
+    )
 
 
 def _hidden_value(html: str, name: str) -> str:

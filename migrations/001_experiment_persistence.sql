@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS experiment_sessions (
     persona_condition JSONB NOT NULL,
     persona_data JSONB NOT NULL,
     theta_persona JSONB NOT NULL,
-    experiment_seed INTEGER NOT NULL,
+    experiment_seed BIGINT NOT NULL,
     algorithm_order JSONB NOT NULL,
     m_order JSONB NOT NULL,
     user_agent TEXT
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS experiment_rounds (
     posterior_covariance JSONB,
     effective_sample_size DOUBLE PRECISION,
     expected_information_gain DOUBLE PRECISION,
-    random_seed INTEGER NOT NULL,
+    random_seed BIGINT NOT NULL,
     query_metadata JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMPTZ,

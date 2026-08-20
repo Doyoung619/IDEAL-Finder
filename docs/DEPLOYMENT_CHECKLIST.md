@@ -14,6 +14,8 @@
    # Existing DB only, after backup:
    psql "$IDEAL_DATABASE_URL" -v ON_ERROR_STOP=1 \
      -f migrations/001_experiment_persistence.sql
+   psql "$IDEAL_DATABASE_URL" -v ON_ERROR_STOP=1 \
+     -f migrations/002_expand_seed_columns.sql
    ```
 
 3. [ ] Generate three different credentials; store none in Git.

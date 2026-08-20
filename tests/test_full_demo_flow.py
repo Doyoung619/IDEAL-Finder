@@ -91,6 +91,11 @@ def test_complete_demo_experiment(tmp_path):
             },
         )
 
+        persona_page = client.get("/persona")
+        assert "선호 대상 · 여성" in persona_page.text
+        assert "단발" in persona_page.text
+        assert "묶은 머리" in persona_page.text
+
         persona_data = {
             f"persona::{category.key}": "no_preference"
             for category in PERSONA_CATEGORIES

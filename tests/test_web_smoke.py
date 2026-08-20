@@ -65,6 +65,10 @@ def test_demo_flow_reaches_first_generated_round(tmp_path):
         persona = client.get(response.headers["location"])
         assert persona.status_code == 200
         assert "어떤 인상의 얼굴" in persona.text
+        assert "선호 대상 · 남성" in persona.text
+        assert "짧은 머리" in persona.text
+        assert "단발" not in persona.text
+        assert "묶은 머리" not in persona.text
         persona_data = {
             f"persona::{category.key}": "no_preference"
             for category in PERSONA_CATEGORIES

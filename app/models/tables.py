@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean,
+    BigInteger,
     DateTime,
     Float,
     ForeignKey,
@@ -46,7 +47,7 @@ class Participant(Base):
     m_condition_order: Mapped[str] = mapped_column(Text)
     recommendation_condition_order: Mapped[str] = mapped_column(Text)
     baseline_latent_path: Mapped[str | None] = mapped_column(Text)
-    base_seed: Mapped[int] = mapped_column(Integer)
+    base_seed: Mapped[int] = mapped_column(BigInteger)
     config_snapshot_path: Mapped[str | None] = mapped_column(Text)
     consent_version: Mapped[str | None] = mapped_column(String(32))
 
@@ -72,7 +73,7 @@ class ExperimentSession(Base):
     persona_condition: Mapped[dict] = mapped_column(JSON_DOCUMENT)
     persona_data: Mapped[dict] = mapped_column(JSON_DOCUMENT)
     theta_persona: Mapped[list] = mapped_column(JSON_DOCUMENT)
-    experiment_seed: Mapped[int] = mapped_column(Integer)
+    experiment_seed: Mapped[int] = mapped_column(BigInteger)
     algorithm_order: Mapped[list] = mapped_column(JSON_DOCUMENT)
     m_order: Mapped[list] = mapped_column(JSON_DOCUMENT)
     user_agent: Mapped[str | None] = mapped_column(Text)
@@ -104,7 +105,7 @@ class ExperimentBlock(Base):
     m_value: Mapped[int] = mapped_column(Integer)
     strategy_mode: Mapped[str] = mapped_column(String(32))
     initial_state_id: Mapped[str] = mapped_column(String(64))
-    initial_seed: Mapped[int] = mapped_column(Integer)
+    initial_seed: Mapped[int] = mapped_column(BigInteger)
     mu_path: Mapped[str] = mapped_column(Text)
     mu_data: Mapped[bytes | None] = mapped_column(LargeBinary)
     sigma: Mapped[float] = mapped_column(Float)
@@ -135,7 +136,7 @@ class LatentImage(Base):
     image_path: Mapped[str] = mapped_column(Text)
     image_data: Mapped[bytes | None] = mapped_column(LargeBinary)
     generator_type: Mapped[str] = mapped_column(String(64))
-    generator_seed: Mapped[int] = mapped_column(Integer)
+    generator_seed: Mapped[int] = mapped_column(BigInteger)
     gender_target: Mapped[str | None] = mapped_column(String(32))
     gender_pred: Mapped[str | None] = mapped_column(String(32))
     gender_confidence: Mapped[float | None] = mapped_column(Float)
@@ -205,7 +206,7 @@ class ExperimentRound(Base):
     posterior_covariance: Mapped[list | None] = mapped_column(JSON_DOCUMENT)
     effective_sample_size: Mapped[float | None] = mapped_column(Float)
     expected_information_gain: Mapped[float | None] = mapped_column(Float)
-    random_seed: Mapped[int] = mapped_column(Integer)
+    random_seed: Mapped[int] = mapped_column(BigInteger)
     query_metadata: Mapped[dict] = mapped_column(JSON_DOCUMENT)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
