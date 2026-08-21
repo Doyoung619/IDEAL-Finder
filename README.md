@@ -4,6 +4,13 @@ StyleGAN FFHQ 얼굴 latent에서 persona 기반 초기 얼굴을 고른 뒤 사
 
 최종 user-study 운영자는 먼저 [`docs/STUDY_RELEASE.md`](docs/STUDY_RELEASE.md)를 확인하세요. GPU 서버 담당자용 절차는 [`docs/GPU_SERVER_HANDOFF.md`](docs/GPU_SERVER_HANDOFF.md), 연구자 배포 순서는 [`docs/DEPLOYMENT_CHECKLIST.md`](docs/DEPLOYMENT_CHECKLIST.md), gateway 계약은 [`docs/GPU_API_CONTRACT.md`](docs/GPU_API_CONTRACT.md), 알고리즘 고정 근거는 [`docs/ALGORITHM_AUDIT.md`](docs/ALGORITHM_AUDIT.md)에 있습니다. 모델·artifact 구축을 포함한 일반 설정은 [SETUP.md](SETUP.md)를 참고하세요.
 
+GPU HTTPS URL과 shared secret을 받은 뒤 Vercel gateway는 다음 한 명령으로
+설정·검증·배포할 수 있습니다. secret은 hidden prompt로 입력합니다.
+
+```bash
+./scripts/deploy_vercel_gateway.sh
+```
+
 ## 처음 실행하기
 
 실제 StyleGAN3 연구 환경의 checkpoint 배치, prior/pool 생성, 검증, 서버 실행 및 원격 접속 절차는 [SETUP.md](SETUP.md)에 순서대로 정리되어 있습니다.

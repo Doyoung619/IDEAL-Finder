@@ -271,8 +271,10 @@ posterior, mixture, Entropy, RC-MLQ, Liu-West, and 12-round behavior are unchang
 
 - With production candidate code removed, the frozen core research file hashes
   match the baseline manifest exactly.
-- Final slim environment: 62 passed, 3 skipped (Torch-only tests skipped).
-- Final Torch environment algorithm subset: 17 passed.
+- Current slim environment: 69 passed, 3 skipped (Torch-only tests skipped).
+- Current Torch environment algorithm/demographic subsets: 22 passed in two
+  processes; combined collection exposed a local macOS NumPy/Torch native-runtime
+  import conflict before project tests executed.
 - The recommended persona-study config is asserted deterministic in
   `tests/test_persona_config.py`.
 

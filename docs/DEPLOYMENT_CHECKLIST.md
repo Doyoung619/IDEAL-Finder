@@ -1,5 +1,29 @@
 # IDEAL-Finder deployment checklist
 
+## Vercel gateway fast path
+
+Vercel CLI가 설치·로그인·프로젝트 연결을 확인하고, GPU endpoint를 먼저 검증한
+뒤 gateway 전용 Production 변수와 배포를 처리하도록 다음 helper를 사용합니다.
+
+```bash
+./scripts/deploy_vercel_gateway.sh --check
+./scripts/deploy_vercel_gateway.sh
+```
+
+두 번째 명령에서 직접 입력하는 핵심 값은 `GPU_BACKEND_URL`과
+`GPU_GATEWAY_SECRET`뿐입니다. secret은 화면에 표시되지 않고 stdin으로 Vercel에
+전달되며 shell history나 local env 파일에 기록되지 않습니다. 프로젝트가 아직
+연결되지 않았다면 한 번만 개인 Hobby scope와 project를 선택합니다. 실제 upload 전
+release commit/config hash와 `DEPLOY` 확인을 요구합니다.
+
+이 helper는 `APP_ROLE`, `APP_ENV`, gateway timeout을 안전한 고정값으로 등록하지만
+`IDEAL_DATABASE_URL`, `SESSION_SECRET`, `IDEAL_ADMIN_PASSWORD`는 Vercel로 보내지
+않습니다. 공식 명령 근거는 [Vercel environment CLI](https://vercel.com/docs/cli/env),
+[project linking](https://vercel.com/docs/cli/link),
+[production deploy](https://vercel.com/docs/cli/deploy)를 참고하세요.
+
+## Full checklist
+
 1. [ ] Create managed PostgreSQL and copy its connection string.
 
    ```bash
@@ -52,6 +76,7 @@
    vercel env add GPU_BACKEND_URL production
    vercel env add GPU_GATEWAY_SECRET production --sensitive
    vercel env add GPU_REQUEST_TIMEOUT_SECONDS production
+   vercel env add GPU_CONNECT_TIMEOUT_SECONDS production
    ```
 
    Do not add `IDEAL_DATABASE_URL` or `SESSION_SECRET` to Vercel; those belong

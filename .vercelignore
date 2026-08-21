@@ -4,12 +4,23 @@ venv
 __pycache__
 .pytest_cache
 .ruff_cache
+.env*
 
 cache
+configs
 data
+docs
+implementation_progress.json
+Makefile
+migrations
 models
 outputs
+progress.png
+pyproject.toml
+README.md
 references
+scripts
+SETUP.md
 tests
 
 # The Vercel function imports only index.py -> app.entrypoint -> app.gateway.

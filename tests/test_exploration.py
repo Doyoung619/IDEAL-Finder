@@ -30,7 +30,7 @@ def test_positive_rho_reopens_global_acquisition_support():
     assert isinstance(view, GlobalExplorationPosteriorView)
     assert np.allclose(view.mean, [0.9, 0.0])
     assert view.covariance[0, 0] > posterior.covariance[0, 0]
-    first = view.sample(100, seed=7, device="cpu").numpy()
-    second = view.sample(100, seed=7, device="cpu").numpy()
+    first = np.asarray(view.sample(100, seed=7, device="cpu"))
+    second = np.asarray(view.sample(100, seed=7, device="cpu"))
     assert np.array_equal(first, second)
     assert first.shape == (100, 2)
