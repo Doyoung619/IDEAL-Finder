@@ -16,14 +16,12 @@ migrations
 models
 outputs
 progress.png
-pyproject.toml
-README.md
 references
 scripts
 SETUP.md
 tests
 
-# The Vercel function imports only index.py -> app.entrypoint -> app.gateway.
+# The Vercel function imports only api/index.py -> app.gateway.
 # Exclude the complete model/DB/research application tree from its bundle.
 core
 experiments

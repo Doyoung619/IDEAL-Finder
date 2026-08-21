@@ -329,10 +329,13 @@ DB의 binary image/latent/state 본문은 CSV에 복제하지 않고 byte size�
 전달하는 public gateway입니다. 기존 local/demo monolith 실행은
 `app.main:app` entrypoint로 계속 지원합니다.
 
-`index.py`는 이제 `APP_ROLE=gateway`를 기본으로 하며 `app.gateway`만 import합니다.
-`requirements-vercel.txt`에는 FastAPI와 HTTP client만 있고, `.vercelignore`가
-model/DB/research tree를 deployment upload와 Python function bundle에서
-제외합니다. CSS/JavaScript는 gateway가
+Vercel은 `api/index.py`에서 dependency-light `app.gateway`를 단일 Python
+Function으로 로드합니다. Root `index.py`는 기존 local/legacy entrypoint 호환성을
+유지합니다.
+Vercel Python runtime은 `pyproject.toml`의 FastAPI/HTTP client 의존성만
+설치하며, `requirements-vercel.txt`에도 동일한 수동 설치용 경량 목록을
+유지합니다. `.vercelignore`가 model/DB/research tree를 deployment upload와
+Python function bundle에서 제외합니다. CSS/JavaScript는 gateway가
 직접 제공하며, 동적 HTML/form은 같은 public origin에서 GPU 앱으로 전달합니다.
 gateway는 브라우저의 기존
 form/cookie/redirect를 그대로 GPU 앱으로 전달하고 secret header를 server-side로

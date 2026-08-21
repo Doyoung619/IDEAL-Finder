@@ -252,14 +252,40 @@ def test_vercel_entrypoint_imports_no_heavy_modules():
     assert result.returncode == 0, result.stderr
 
 
-def test_vercel_config_uses_root_fastapi_autodetection():
+def test_vercel_config_uses_api_fastapi_function():
     project_root = Path(__file__).resolve().parents[1]
     config = json.loads((project_root / "vercel.json").read_text(encoding="utf-8"))
 
-    assert config["installCommand"] == (
-        "python -m pip install -r requirements-vercel.txt"
+    assert "installCommand" not in config
+    assert config["functions"] == {"api/index.py": {"maxDuration": 60}}
+    assert config["rewrites"] == [{"source": "/(.*)", "destination": "/api"}]
+
+    pyproject = (project_root / "pyproject.toml").read_text(encoding="utf-8")
+    assert '"fastapi>=0.115,<1"' in pyproject
+    assert '"httpx>=0.27,<1"' in pyproject
+
+
+def test_vercel_api_entrypoint_imports_no_heavy_modules():
+    project_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import os,sys; os.environ['APP_ENV']='production'; "
+                "os.environ['GPU_BACKEND_URL']='https://gpu.example.invalid'; "
+                "os.environ['GPU_GATEWAY_SECRET']='x'*32; import api.index; "
+                "blocked={'torch','sqlalchemy','numpy','PIL','open_clip'}; "
+                "loaded={name.split('.')[0] for name in sys.modules}; "
+                "assert not blocked & loaded, blocked & loaded"
+            ),
+        ],
+        cwd=project_root,
+        text=True,
+        capture_output=True,
+        check=False,
     )
-    assert "functions" not in config
+    assert result.returncode == 0, result.stderr
 
 
 def test_gateway_returns_retryable_errors_for_gpu_failures():
