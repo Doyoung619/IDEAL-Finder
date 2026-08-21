@@ -331,7 +331,8 @@ DB의 binary image/latent/state 본문은 CSV에 복제하지 않고 byte size�
 
 Vercel은 `api/index.py`에서 dependency-light `app.gateway`를 단일 Python
 Function으로 로드합니다. Root `index.py`는 기존 local/legacy entrypoint 호환성을
-유지합니다.
+유지하지만 Vercel upload에서는 제외됩니다. 모든 public path를 Python Function에
+우선 연결해 project source가 정적 파일로 제공되지 않게 합니다.
 Vercel Python runtime은 `pyproject.toml`의 FastAPI/HTTP client 의존성만
 설치하며, `requirements-vercel.txt`에도 동일한 수동 설치용 경량 목록을
 유지합니다. `.vercelignore`가 model/DB/research tree를 deployment upload와

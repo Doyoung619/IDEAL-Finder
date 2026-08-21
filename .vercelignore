@@ -16,12 +16,14 @@ migrations
 models
 outputs
 progress.png
+/index.py
 references
 scripts
 SETUP.md
 tests
 
-# The Vercel function imports only api/index.py -> app.gateway.
+# The Vercel function imports only api/index.py -> app.gateway. The legacy root
+# entrypoint is excluded so Vercel cannot treat it as a static index asset.
 # Exclude the complete model/DB/research application tree from its bundle.
 core
 experiments

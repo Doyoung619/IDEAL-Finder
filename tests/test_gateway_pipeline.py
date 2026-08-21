@@ -258,7 +258,11 @@ def test_vercel_config_uses_api_fastapi_function():
 
     assert "installCommand" not in config
     assert config["functions"] == {"api/index.py": {"maxDuration": 60}}
-    assert config["rewrites"] == [{"source": "/(.*)", "destination": "/api"}]
+    assert "rewrites" not in config
+    assert config["routes"] == [{"src": "/(.*)", "dest": "/api"}]
+
+    vercel_ignore = (project_root / ".vercelignore").read_text(encoding="utf-8")
+    assert "/index.py" in {line.strip() for line in vercel_ignore.splitlines()}
 
     pyproject = (project_root / "pyproject.toml").read_text(encoding="utf-8")
     assert '"fastapi>=0.115,<1"' in pyproject
