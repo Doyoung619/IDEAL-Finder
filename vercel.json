@@ -1,10 +1,4 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "python -m pip install -r requirements-vercel.txt",
-  "functions": {
-    "index.py": {
-      "maxDuration": 60,
-      "excludeFiles": "{core/**,experiments/**,app/db/**,app/models/**,app/routes/**,app/services/**,app/templates/**,app/main.py,app/settings.py,tests/**,scripts/**,models/**,artifacts/**,data/**,outputs/**,references/**,requirements.txt,requirements-gpu.txt}"
-    }
-  }
+  "installCommand": "python -m pip install -r requirements-vercel.txt"
 }

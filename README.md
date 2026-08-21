@@ -331,8 +331,8 @@ DB의 binary image/latent/state 본문은 CSV에 복제하지 않고 byte size�
 
 `index.py`는 이제 `APP_ROLE=gateway`를 기본으로 하며 `app.gateway`만 import합니다.
 `requirements-vercel.txt`에는 FastAPI와 HTTP client만 있고, `.vercelignore`가
-deployment upload를 줄이며 `vercel.json`의 `excludeFiles`가 model/DB/research
-tree를 Python function bundle에서 제외합니다. CSS/JavaScript는 gateway가
+model/DB/research tree를 deployment upload와 Python function bundle에서
+제외합니다. CSS/JavaScript는 gateway가
 직접 제공하며, 동적 HTML/form은 같은 public origin에서 GPU 앱으로 전달합니다.
 gateway는 브라우저의 기존
 form/cookie/redirect를 그대로 GPU 앱으로 전달하고 secret header를 server-side로

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -249,6 +250,16 @@ def test_vercel_entrypoint_imports_no_heavy_modules():
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_vercel_config_uses_root_fastapi_autodetection():
+    project_root = Path(__file__).resolve().parents[1]
+    config = json.loads((project_root / "vercel.json").read_text(encoding="utf-8"))
+
+    assert config["installCommand"] == (
+        "python -m pip install -r requirements-vercel.txt"
+    )
+    assert "functions" not in config
 
 
 def test_gateway_returns_retryable_errors_for_gpu_failures():

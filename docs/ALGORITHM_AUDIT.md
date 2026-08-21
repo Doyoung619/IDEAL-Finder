@@ -271,7 +271,7 @@ posterior, mixture, Entropy, RC-MLQ, Liu-West, and 12-round behavior are unchang
 
 - With production candidate code removed, the frozen core research file hashes
   match the baseline manifest exactly.
-- Current slim environment: 69 passed, 3 skipped (Torch-only tests skipped).
+- Current slim environment: 70 passed, 3 skipped (Torch-only tests skipped).
 - Current Torch environment algorithm/demographic subsets: 22 passed in two
   processes; combined collection exposed a local macOS NumPy/Torch native-runtime
   import conflict before project tests executed.

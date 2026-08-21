@@ -74,7 +74,7 @@ not need `SESSION_SECRET`.
 
 - Gateway connect timeout: `GPU_CONNECT_TIMEOUT_SECONDS` (default 5 seconds)
 - Gateway total upstream timeout: `GPU_REQUEST_TIMEOUT_SECONDS` (default 50 seconds)
-- Repository Vercel function limit: 60 seconds in `vercel.json`
+- Gateway upstream timeout: 50 seconds (`GPU_REQUEST_TIMEOUT_SECONDS`)
 - Missing/wrong GPU secret: `401` / `403`
 - GPU unavailable: gateway `503` with `Retry-After: 3`
 - GPU timeout: gateway `504` with `Retry-After: 3`

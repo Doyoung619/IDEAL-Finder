@@ -91,7 +91,7 @@ added.
 
 ## Release validation
 
-- Python 3.10 slim suite: 69 passed, 3 skipped. The skips are exactly the three
+- Python 3.10 slim suite: 70 passed, 3 skipped. The skips are exactly the three
   Torch-optional collection modules (`test_entropy_query`,
   `test_demographic_age`, `test_demographic_prior_builder`).
 - Separate Torch environment algorithm/demographic subsets: 22 passed. They were
